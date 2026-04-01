@@ -11,10 +11,11 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file, write_file,
-    ApiClient, ApiRequest, AssistantEvent, BashCommandInput, ContentBlock, ConversationMessage,
-    ConversationRuntime, GrepSearchInput, MessageRole, PermissionMode, PermissionPolicy,
-    RuntimeError, Session, TokenUsage, ToolError, ToolExecutor,
+    edit_file, execute_bash, glob_search, grep_search, load_system_prompt, read_file,
+    resolve_skill_path as resolve_runtime_skill_path, write_file, ApiClient, ApiRequest,
+    AssistantEvent, BashCommandInput, ContentBlock, ConversationMessage, ConversationRuntime,
+    GrepSearchInput, MessageRole, PermissionMode, PermissionPolicy, RuntimeError, Session,
+    TokenUsage, ToolError, ToolExecutor,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -91,7 +92,10 @@ impl GlobalToolRegistry {
         Ok(Self { plugin_tools })
     }
 
-    pub fn normalize_allowed_tools(&self, values: &[String]) -> Result<Option<BTreeSet<String>>, String> {
+    pub fn normalize_allowed_tools(
+        &self,
+        values: &[String],
+    ) -> Result<Option<BTreeSet<String>>, String> {
         if values.is_empty() {
             return Ok(None);
         }
@@ -100,7 +104,11 @@ impl GlobalToolRegistry {
         let canonical_names = builtin_specs
             .iter()
             .map(|spec| spec.name.to_string())
-            .chain(self.plugin_tools.iter().map(|tool| tool.definition().name.clone()))
+            .chain(
+                self.plugin_tools
+                    .iter()
+                    .map(|tool| tool.definition().name.clone()),
+            )
             .collect::<Vec<_>>();
         let mut name_map = canonical_names
             .iter()
@@ -151,7 +159,8 @@ impl GlobalToolRegistry {
             .plugin_tools
             .iter()
             .filter(|tool| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+                allowed_tools
+                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
             })
             .map(|tool| ToolDefinition {
                 name: tool.definition().name.clone(),
@@ -174,7 +183,8 @@ impl GlobalToolRegistry {
             .plugin_tools
             .iter()
             .filter(|tool| {
-                allowed_tools.is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
+                allowed_tools
+                    .is_none_or(|allowed| allowed.contains(tool.definition().name.as_str()))
             })
             .map(|tool| {
                 (
@@ -1455,47 +1465,8 @@ fn todo_store_path() -> Result<std::path::PathBuf, String> {
 }
 
 fn resolve_skill_path(skill: &str) -> Result<std::path::PathBuf, String> {
-    let requested = skill.trim().trim_start_matches('/').trim_start_matches('$');
-    if requested.is_empty() {
-        return Err(String::from("skill must not be empty"));
-    }
-
-    let mut candidates = Vec::new();
-    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
-        candidates.push(std::path::PathBuf::from(codex_home).join("skills"));
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        let home = std::path::PathBuf::from(home);
-        candidates.push(home.join(".agents").join("skills"));
-        candidates.push(home.join(".config").join("opencode").join("skills"));
-        candidates.push(home.join(".codex").join("skills"));
-    }
-    candidates.push(std::path::PathBuf::from("/home/bellman/.codex/skills"));
-
-    for root in candidates {
-        let direct = root.join(requested).join("SKILL.md");
-        if direct.exists() {
-            return Ok(direct);
-        }
-
-        if let Ok(entries) = std::fs::read_dir(&root) {
-            for entry in entries.flatten() {
-                let path = entry.path().join("SKILL.md");
-                if !path.exists() {
-                    continue;
-                }
-                if entry
-                    .file_name()
-                    .to_string_lossy()
-                    .eq_ignore_ascii_case(requested)
-                {
-                    return Ok(path);
-                }
-            }
-        }
-    }
-
-    Err(format!("unknown skill: {requested}"))
+    let cwd = std::env::current_dir().map_err(|error| error.to_string())?;
+    resolve_runtime_skill_path(skill, &cwd)
 }
 
 const DEFAULT_AGENT_MODEL: &str = "claude-opus-4-6";
@@ -3486,6 +3457,65 @@ mod tests {
             .as_str()
             .expect("path")
             .ends_with("/help/SKILL.md"));
+    }
+
+    #[test]
+    fn skill_resolves_workspace_skill_and_legacy_command() {
+        let _guard = env_lock()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let root = temp_path("workspace-skills");
+        let cwd = root.join("apps").join("ui");
+        let original_dir = std::env::current_dir().expect("cwd");
+
+        std::fs::create_dir_all(root.join(".claw").join("skills").join("review"))
+            .expect("workspace skill dir");
+        std::fs::write(
+            root.join(".claw")
+                .join("skills")
+                .join("review")
+                .join("SKILL.md"),
+            "---\ndescription: Workspace review guidance\n---\n# review\n",
+        )
+        .expect("write workspace skill");
+        std::fs::create_dir_all(root.join(".codex").join("commands")).expect("legacy root");
+        std::fs::write(
+            root.join(".codex").join("commands").join("deploy.md"),
+            "---\ndescription: Deploy command guidance\n---\n# deploy\n",
+        )
+        .expect("write legacy command");
+        std::fs::create_dir_all(&cwd).expect("cwd");
+
+        std::env::set_current_dir(&cwd).expect("set cwd");
+
+        let workspace_skill = execute_tool("Skill", &json!({ "skill": "review" }))
+            .expect("workspace skill should resolve");
+        let workspace_output: serde_json::Value =
+            serde_json::from_str(&workspace_skill).expect("valid json");
+        assert_eq!(
+            workspace_output["description"].as_str(),
+            Some("Workspace review guidance")
+        );
+        assert!(workspace_output["path"]
+            .as_str()
+            .expect("path")
+            .ends_with(".claw/skills/review/SKILL.md"));
+
+        let legacy_skill = execute_tool("Skill", &json!({ "skill": "/deploy" }))
+            .expect("legacy command should resolve");
+        let legacy_output: serde_json::Value =
+            serde_json::from_str(&legacy_skill).expect("valid json");
+        assert_eq!(
+            legacy_output["description"].as_str(),
+            Some("Deploy command guidance")
+        );
+        assert!(legacy_output["path"]
+            .as_str()
+            .expect("path")
+            .ends_with(".codex/commands/deploy.md"));
+
+        std::env::set_current_dir(&original_dir).expect("restore cwd");
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

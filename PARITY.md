@@ -104,18 +104,18 @@ Evidence:
 
 ### Rust exists
 Evidence:
-- `Skill` tool in `rust/crates/tools/src/lib.rs` resolves and reads local `SKILL.md` files.
+- `Skill` tool in `rust/crates/tools/src/lib.rs` now resolves workspace-local `.codex/.claw` skills plus legacy `/commands` entries through shared runtime discovery.
+- `/skills` exists in `rust/crates/commands/src/lib.rs` and `rust/crates/claw-cli/src/main.rs`, listing discoverable local skills and checked skill directories in the current workspace context.
 - CLAW.md discovery is implemented in `rust/crates/runtime/src/prompt.rs`.
 - Rust supports `/memory` and `/init` via `rust/crates/commands/src/lib.rs` and `rust/crates/claw-cli/src/main.rs`.
 
 ### Missing or broken in Rust
 - No bundled skill registry equivalent.
-- No `/skills` command.
 - No MCP skill-builder pipeline.
 - No TS-style live skill discovery/reload/change handling.
 - No comparable session-memory / team-memory integration around skills.
 
-**Status:** basic local skill loading only.
+**Status:** local/workspace skill loading plus minimal `/skills` discovery; bundled/MCP parity still missing.
 
 ---
 
@@ -130,11 +130,11 @@ Evidence:
 ### Rust exists
 Evidence:
 - Shared slash command registry in `rust/crates/commands/src/lib.rs`.
-- Rust slash commands currently cover `help`, `status`, `compact`, `model`, `permissions`, `clear`, `cost`, `resume`, `config`, `memory`, `init`, `diff`, `version`, `export`, `session`.
+- Rust slash commands currently cover `help`, `status`, `compact`, `model`, `permissions`, `clear`, `cost`, `resume`, `config`, `memory`, `init`, `diff`, `version`, `export`, `session`, `plugin`, `agents`, and `skills`.
 - Main CLI/repl/prompt handling lives in `rust/crates/claw-cli/src/main.rs`.
 
 ### Missing or broken in Rust
-- Missing major TS command families: `/agents`, `/hooks`, `/mcp`, `/plugin`, `/skills`, `/plan`, `/review`, `/tasks`, and many others.
+- Missing major TS command families: `/hooks`, `/mcp`, `/plan`, `/review`, `/tasks`, and many others.
 - No Rust equivalent to TS structured IO / remote transport layers.
 - No TS-style handler decomposition for auth/plugins/MCP/agents.
 - JSON prompt mode now maintains clean transport output in tool-capable runs; targeted CLI coverage should guard against regressions.

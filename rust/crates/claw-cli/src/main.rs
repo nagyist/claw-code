@@ -1147,8 +1147,7 @@ impl LiveCli {
                     "/init · then type / to browse commands"
                 }
             ),
-            "  Autocomplete     Type / for command suggestions · Tab accepts or cycles"
-                .to_string(),
+            "  Autocomplete     Type / for command suggestions · Tab accepts or cycles".to_string(),
             "  Editor           /vim toggles modal editing · Esc clears menus first".to_string(),
             "  Multiline        Shift+Enter or Ctrl+J inserts a newline".to_string(),
         ];
@@ -3293,7 +3292,11 @@ fn slash_command_descriptors() -> Vec<SlashCommandDescriptor> {
             command: format!("/{}", spec.name),
             description: Some(spec.summary.to_string()),
             argument_hint: spec.argument_hint.map(ToOwned::to_owned),
-            aliases: spec.aliases.iter().map(|alias| format!("/{alias}")).collect(),
+            aliases: spec
+                .aliases
+                .iter()
+                .map(|alias| format!("/{alias}"))
+                .collect(),
         })
         .collect::<Vec<_>>();
     descriptors.extend([
@@ -4056,7 +4059,7 @@ fn print_help_to(out: &mut impl Write) -> io::Result<()> {
     )?;
     writeln!(
         out,
-        "  claw skills                           List installed skills"
+        "  claw skills                           List discoverable local skills"
     )?;
     writeln!(out, "  claw system-prompt [--cwd PATH] [--date YYYY-MM-DD]")?;
     writeln!(
@@ -4146,9 +4149,9 @@ mod tests {
         print_help_to, push_output_block, render_config_report, render_memory_report,
         render_repl_help, render_unknown_repl_command, resolve_model_alias, response_to_events,
         resume_supported_slash_commands, slash_command_completion_candidates,
-        slash_command_descriptors, status_context,
-        CliAction, CliOutputFormat, InternalPromptProgressEvent, InternalPromptProgressState,
-        SlashCommand, StatusUsage, DEFAULT_MODEL,
+        slash_command_descriptors, status_context, CliAction, CliOutputFormat,
+        InternalPromptProgressEvent, InternalPromptProgressState, SlashCommand, StatusUsage,
+        DEFAULT_MODEL,
     };
     use api::{MessageResponse, OutputContentBlock, Usage};
     use plugins::{PluginTool, PluginToolDefinition, PluginToolPermission};
