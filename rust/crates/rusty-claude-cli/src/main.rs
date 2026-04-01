@@ -903,6 +903,8 @@ fn run_resume_command(
         | SlashCommand::Permissions { .. }
         | SlashCommand::Session { .. }
         | SlashCommand::Plugins { .. }
+        | SlashCommand::Agents { .. }
+        | SlashCommand::Skills { .. }
         | SlashCommand::Unknown(_) => Err("unsupported resumed slash command".into()),
     }
 }
@@ -1196,6 +1198,14 @@ impl LiveCli {
             }
             SlashCommand::Plugins { action, target } => {
                 self.handle_plugins_command(action.as_deref(), target.as_deref())?
+            }
+            SlashCommand::Agents { .. } => {
+                eprintln!("/agents is not fully wired yet");
+                false
+            }
+            SlashCommand::Skills { .. } => {
+                eprintln!("/skills is not fully wired yet");
+                false
             }
             SlashCommand::Unknown(name) => {
                 eprintln!("unknown slash command: /{name}");
