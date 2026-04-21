@@ -18,6 +18,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::current_boot_session_id;
+
 fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -768,6 +770,7 @@ fn push_event(
 #[derive(serde::Serialize)]
 struct StateSnapshot<'a> {
     worker_id: &'a str,
+    session_id: &'a str,
     status: WorkerStatus,
     is_ready: bool,
     trust_gate_cleared: bool,
@@ -790,6 +793,7 @@ fn emit_state_file(worker: &Worker) {
     let now = now_secs();
     let snapshot = StateSnapshot {
         worker_id: &worker.worker_id,
+        session_id: current_boot_session_id(),
         status: worker.status,
         is_ready: worker.status == WorkerStatus::ReadyForPrompt,
         trust_gate_cleared: worker.trust_gate_cleared,
@@ -1448,6 +1452,10 @@ mod tests {
             value["status"].as_str(),
             Some("spawning"),
             "initial status should be spawning"
+        );
+        assert_eq!(
+            value["session_id"].as_str(),
+            Some(current_boot_session_id())
         );
         assert_eq!(value["is_ready"].as_bool(), Some(false));
 

@@ -244,6 +244,7 @@ pub struct LaneEventBuilder {
     event: LaneEventName,
     status: LaneEventStatus,
     emitted_at: String,
+    session_id: Option<String>,
     metadata: LaneEventMetadata,
     detail: Option<String>,
     failure_class: Option<LaneFailureClass>,
@@ -264,6 +265,7 @@ impl LaneEventBuilder {
             event,
             status,
             emitted_at: emitted_at.into(),
+            session_id: None,
             metadata: LaneEventMetadata::new(seq, provenance),
             detail: None,
             failure_class: None,
@@ -275,6 +277,13 @@ impl LaneEventBuilder {
     #[must_use]
     pub fn with_session_identity(mut self, identity: SessionIdentity) -> Self {
         self.metadata = self.metadata.with_session_identity(identity);
+        self
+    }
+
+    /// Add boot-scoped session correlation id
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
 
@@ -328,6 +337,7 @@ impl LaneEventBuilder {
             event: self.event,
             status: self.status,
             emitted_at: self.emitted_at,
+            session_id: self.session_id,
             failure_class: self.failure_class,
             detail: self.detail,
             data: self.data,
@@ -405,7 +415,10 @@ pub enum BlockedSubphase {
     #[serde(rename = "blocked.branch_freshness")]
     BranchFreshness { behind_main: u32 },
     #[serde(rename = "blocked.test_hang")]
-    TestHang { elapsed_secs: u32, test_name: Option<String> },
+    TestHang {
+        elapsed_secs: u32,
+        test_name: Option<String>,
+    },
     #[serde(rename = "blocked.report_pending")]
     ReportPending { since_secs: u32 },
 }
@@ -462,6 +475,8 @@ pub struct LaneEvent {
     pub status: LaneEventStatus,
     #[serde(rename = "emittedAt")]
     pub emitted_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     #[serde(rename = "failureClass", skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<LaneFailureClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -485,6 +500,7 @@ impl LaneEvent {
             event,
             status,
             emitted_at: emitted_at.into(),
+            session_id: None,
             failure_class: None,
             detail: None,
             data: None,
@@ -543,7 +559,8 @@ impl LaneEvent {
             .with_failure_class(blocker.failure_class)
             .with_detail(blocker.detail.clone());
         if let Some(ref subphase) = blocker.subphase {
-            event = event.with_data(serde_json::to_value(subphase).expect("subphase should serialize"));
+            event =
+                event.with_data(serde_json::to_value(subphase).expect("subphase should serialize"));
         }
         event
     }
@@ -554,7 +571,8 @@ impl LaneEvent {
             .with_failure_class(blocker.failure_class)
             .with_detail(blocker.detail.clone());
         if let Some(ref subphase) = blocker.subphase {
-            event = event.with_data(serde_json::to_value(subphase).expect("subphase should serialize"));
+            event =
+                event.with_data(serde_json::to_value(subphase).expect("subphase should serialize"));
         }
         event
     }
@@ -562,8 +580,12 @@ impl LaneEvent {
     /// Ship prepared — §4.44.5
     #[must_use]
     pub fn ship_prepared(emitted_at: impl Into<String>, provenance: &ShipProvenance) -> Self {
-        Self::new(LaneEventName::ShipPrepared, LaneEventStatus::Ready, emitted_at)
-            .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
+        Self::new(
+            LaneEventName::ShipPrepared,
+            LaneEventStatus::Ready,
+            emitted_at,
+        )
+        .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
     }
 
     /// Ship commits selected — §4.44.5
@@ -573,22 +595,34 @@ impl LaneEvent {
         commit_count: u32,
         commit_range: impl Into<String>,
     ) -> Self {
-        Self::new(LaneEventName::ShipCommitsSelected, LaneEventStatus::Ready, emitted_at)
-            .with_detail(format!("{} commits: {}", commit_count, commit_range.into()))
+        Self::new(
+            LaneEventName::ShipCommitsSelected,
+            LaneEventStatus::Ready,
+            emitted_at,
+        )
+        .with_detail(format!("{} commits: {}", commit_count, commit_range.into()))
     }
 
     /// Ship merged — §4.44.5
     #[must_use]
     pub fn ship_merged(emitted_at: impl Into<String>, provenance: &ShipProvenance) -> Self {
-        Self::new(LaneEventName::ShipMerged, LaneEventStatus::Completed, emitted_at)
-            .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
+        Self::new(
+            LaneEventName::ShipMerged,
+            LaneEventStatus::Completed,
+            emitted_at,
+        )
+        .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
     }
 
     /// Ship pushed to main — §4.44.5
     #[must_use]
     pub fn ship_pushed_main(emitted_at: impl Into<String>, provenance: &ShipProvenance) -> Self {
-        Self::new(LaneEventName::ShipPushedMain, LaneEventStatus::Completed, emitted_at)
-            .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
+        Self::new(
+            LaneEventName::ShipPushedMain,
+            LaneEventStatus::Completed,
+            emitted_at,
+        )
+        .with_data(serde_json::to_value(provenance).expect("ship provenance should serialize"))
     }
 
     #[must_use]
@@ -612,6 +646,12 @@ impl LaneEvent {
     #[must_use]
     pub fn with_data(mut self, data: Value) -> Self {
         self.data = Some(data);
+        self
+    }
+
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
 }
@@ -1044,6 +1084,7 @@ mod tests {
             42,
             EventProvenance::Test,
         )
+        .with_session_id("boot-abc123def4567890")
         .with_session_identity(SessionIdentity::new("test-lane", "/tmp", "test"))
         .with_ownership(LaneOwnership {
             owner: "bot-1".to_string(),
@@ -1055,6 +1096,7 @@ mod tests {
         .build();
 
         assert_eq!(event.event, LaneEventName::Started);
+        assert_eq!(event.session_id.as_deref(), Some("boot-abc123def4567890"));
         assert_eq!(event.metadata.seq, 42);
         assert_eq!(event.metadata.provenance, EventProvenance::Test);
         assert_eq!(
@@ -1083,5 +1125,35 @@ mod tests {
         assert_eq!(round_trip.seq, 5);
         assert_eq!(round_trip.provenance, EventProvenance::Healthcheck);
         assert_eq!(round_trip.nudge_id, Some("nudge-abc".to_string()));
+    }
+
+    #[test]
+    fn lane_event_session_id_round_trips_through_serialization() {
+        let event = LaneEventBuilder::new(
+            LaneEventName::Started,
+            LaneEventStatus::Running,
+            "2026-04-04T00:00:00Z",
+            1,
+            EventProvenance::LiveLane,
+        )
+        .with_session_id("boot-0123456789abcdef")
+        .build();
+
+        let json = serde_json::to_value(&event).expect("should serialize");
+        assert_eq!(json["session_id"], "boot-0123456789abcdef");
+
+        let round_trip: LaneEvent = serde_json::from_value(json).expect("should deserialize");
+        assert_eq!(
+            round_trip.session_id.as_deref(),
+            Some("boot-0123456789abcdef")
+        );
+    }
+
+    #[test]
+    fn lane_event_session_id_omits_field_when_absent() {
+        let event = LaneEvent::started("2026-04-04T00:00:00Z");
+        let json = serde_json::to_value(&event).expect("should serialize");
+
+        assert!(json.get("session_id").is_none());
     }
 }

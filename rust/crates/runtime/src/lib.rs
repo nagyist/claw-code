@@ -36,6 +36,7 @@ mod remote;
 pub mod sandbox;
 mod session;
 pub mod session_control;
+mod session_identity;
 pub use session_control::SessionStore;
 mod sse;
 pub mod stale_base;
@@ -152,6 +153,9 @@ pub use sandbox::{
 pub use session::{
     ContentBlock, ConversationMessage, MessageRole, Session, SessionCompaction, SessionError,
     SessionFork, SessionPromptEntry,
+};
+pub use session_identity::{
+    begin_session, current_boot_session_id, end_session, is_active_session,
 };
 pub use sse::{IncrementalSseParser, SseEvent};
 pub use stale_base::{

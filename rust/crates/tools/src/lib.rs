@@ -11,8 +11,8 @@ use api::{
 use plugins::PluginTool;
 use reqwest::blocking::Client;
 use runtime::{
-    check_freshness, dedupe_superseded_commit_events, edit_file, execute_bash, glob_search,
-    grep_search, load_system_prompt,
+    check_freshness, current_boot_session_id, dedupe_superseded_commit_events, edit_file,
+    execute_bash, glob_search, grep_search, load_system_prompt,
     lsp_client::LspRegistry,
     mcp_tool_bridge::McpToolRegistry,
     permission_enforcer::{EnforcementResult, PermissionEnforcer},
@@ -3535,7 +3535,9 @@ where
         created_at: created_at.clone(),
         started_at: Some(created_at),
         completed_at: None,
-        lane_events: vec![LaneEvent::started(iso8601_now())],
+        lane_events: vec![
+            LaneEvent::started(iso8601_now()).with_session_id(current_boot_session_id())
+        ],
         current_blocker: None,
         derived_state: String::from("working"),
         error: None,
@@ -3744,6 +3746,11 @@ fn persist_agent_terminal_state(
     error: Option<String>,
 ) -> Result<(), String> {
     let blocker = error.as_deref().map(classify_lane_blocker);
+    let session_id = manifest
+        .lane_events
+        .last()
+        .and_then(|event| event.session_id.clone())
+        .unwrap_or_else(|| current_boot_session_id().to_string());
     append_agent_output(
         &manifest.output_file,
         &format_agent_terminal_output(status, result, blocker.as_ref(), error.as_deref()),
@@ -3758,26 +3765,31 @@ fn persist_agent_terminal_state(
     if let Some(blocker) = blocker {
         next_manifest
             .lane_events
-            .push(LaneEvent::blocked(iso8601_now(), &blocker));
+            .push(LaneEvent::blocked(iso8601_now(), &blocker).with_session_id(session_id.clone()));
         next_manifest
             .lane_events
-            .push(LaneEvent::failed(iso8601_now(), &blocker));
+            .push(LaneEvent::failed(iso8601_now(), &blocker).with_session_id(session_id.clone()));
     } else {
         next_manifest.current_blocker = None;
         let mut finished_summary = build_lane_finished_summary(&next_manifest, result);
         finished_summary.data.disabled_cron_ids = disable_matching_crons(&next_manifest, result);
         next_manifest.lane_events.push(
-            LaneEvent::finished(iso8601_now(), finished_summary.detail).with_data(
-                serde_json::to_value(&finished_summary.data)
-                    .expect("lane summary metadata should serialize"),
-            ),
+            LaneEvent::finished(iso8601_now(), finished_summary.detail)
+                .with_data(
+                    serde_json::to_value(&finished_summary.data)
+                        .expect("lane summary metadata should serialize"),
+                )
+                .with_session_id(session_id.clone()),
         );
         if let Some(provenance) = maybe_commit_provenance(result) {
-            next_manifest.lane_events.push(LaneEvent::commit_created(
-                iso8601_now(),
-                Some(format!("commit {}", provenance.commit)),
-                provenance,
-            ));
+            next_manifest.lane_events.push(
+                LaneEvent::commit_created(
+                    iso8601_now(),
+                    Some(format!("commit {}", provenance.commit)),
+                    provenance,
+                )
+                .with_session_id(session_id),
+            );
         }
     }
     write_agent_manifest(&next_manifest)
@@ -7761,6 +7773,9 @@ mod tests {
         assert!(manifest_contents.contains("\"status\": \"running\""));
         assert_eq!(manifest_json["laneEvents"][0]["event"], "lane.started");
         assert_eq!(manifest_json["laneEvents"][0]["status"], "running");
+        assert!(manifest_json["laneEvents"][0]["session_id"]
+            .as_str()
+            .is_some());
         assert!(manifest_json["currentBlocker"].is_null());
         let captured_job = captured
             .lock()
@@ -7838,9 +7853,16 @@ mod tests {
             completed_manifest_json["laneEvents"][0]["event"],
             "lane.started"
         );
+        let session_id = completed_manifest_json["laneEvents"][0]["session_id"]
+            .as_str()
+            .expect("startup session_id should exist");
         assert_eq!(
             completed_manifest_json["laneEvents"][1]["event"],
             "lane.finished"
+        );
+        assert_eq!(
+            completed_manifest_json["laneEvents"][1]["session_id"],
+            session_id
         );
         assert_eq!(
             completed_manifest_json["laneEvents"][1]["data"]["qualityFloorApplied"],
@@ -7853,6 +7875,10 @@ mod tests {
         assert_eq!(
             completed_manifest_json["laneEvents"][2]["event"],
             "lane.commit.created"
+        );
+        assert_eq!(
+            completed_manifest_json["laneEvents"][2]["session_id"],
+            session_id
         );
         assert_eq!(
             completed_manifest_json["laneEvents"][2]["data"]["commit"],
