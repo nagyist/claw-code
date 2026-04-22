@@ -9132,6 +9132,25 @@ A documentation-vs-implementation divergence can cause different amounts of cons
 
 ## Pinpoint #165. CLAUDE.md documents v2.0 (aspirational) envelope as current behavior — P0 active misdocumentation
 
+**Status: ✅ DONE (cycle #81, 2026-04-23 05:15 Seoul, commit `1a03359`). Option A implemented.**
+
+**Fix applied:**
+- CLAUDE.md SCHEMAS.md section: now labels 'target v2.0 design' and lists both current v1.0 binary shape + v2.0 target shape
+- CLAUDE.md clawable-commands requirements: explicitly separates v1.0 (current) and v2.0 (post-FIX_LOCUS_164) requirements
+- Added migration note pointing to FIX_LOCUS_164.md
+- Preserves current truth (v1.0 as reality) while clearly labeling v2.0 target as separate future state
+
+**Taxonomy insight (from gaebal-gajae cycle #80 review):** P0 doc-truthfulness has three distinct failure subclasses now:
+- USAGE.md: **active misdocumentation** (sentence is false about consistent envelope)
+- ERROR_HANDLING.md: **copy-paste trap** (example code would crash against actual binary)
+- CLAUDE.md: **target/current boundary collapse** (describes target schema as if it were current reality)
+
+All three are variants of 'doc claims X, binary does Y' but differ in consumer harm profile. Copy-paste trap is worst (immediate crash), boundary collapse is subtlest (gradual misorientation of contract expectations).
+
+---
+
+**Original filing follows below.**
+
 **Status: 📋 FILED (cycle #80, 2026-04-23 05:12 Seoul).**
 
 **Surface.** CLAUDE.md line ~31 states:
