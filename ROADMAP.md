@@ -6576,3 +6576,89 @@ main.py: error: the following arguments are required: command
 - #179 (stderr hygiene + real message): quality contract — envelope carries real error message
 - #180 (this): discoverability contract — claws can enumerate the surface before dispatching
 
+
+
+---
+
+## Pinpoint #247. `classify_error_kind()` misses prompt-related parse errors — "empty prompt" and "prompt subcommand requires" classified as `unknown` instead of `cli_parse`; JSON envelope also drops the `Run claw --help for usage` hint
+
+**Gap.** Typed-error contract (§4.44) specifies an enumerated error kind set: `filesystem | auth | session | parse | runtime | mcp | delivery | usage | policy | unknown`. The `classify_error_kind()` function at `rust/crates/rusty-claude-cli/src/main.rs:246-280` uses substring matching to map error messages to these kinds. Two common prompt-related parse errors are NOT matched and fall through to `unknown`:
+
+1. **"prompt subcommand requires a prompt string"** (from `claw prompt` with no argument) — should be `cli_parse` or `missing_argument`
+2. **"empty prompt: provide a subcommand..."** (from `claw ""` or `claw "   "`) — should be `cli_parse` or `usage`
+
+Separately, the JSON envelope loses the hint trailer. Text mode appends "Run `claw --help` for usage." to parse errors; JSON mode emits `"hint": null`. The hint is added at the print stage (main.rs:228-243) AFTER `split_error_hint()` has already run on the raw message, so the JSON envelope never sees it.
+
+**Repro.** Dogfooded 2026-04-22 on main HEAD `dd0993c` (cycle #33) from `/Users/yeongyu/clawd/claw-code/rust`:
+
+```bash
+# Text mode (correct hint, wrong kind):
+$ claw prompt
+[error-kind: unknown]
+error: prompt subcommand requires a prompt string
+
+Run `claw --help` for usage.
+$ echo $?
+1
+# Observation: error-kind is "unknown", should be "cli_parse" or "missing_argument".
+# The hint "Run claw --help for usage." IS present in text output.
+
+# JSON mode (wrong kind AND missing hint):
+$ claw --output-format json prompt
+{"error":"prompt subcommand requires a prompt string","hint":null,"kind":"unknown","type":"error"}
+$ echo $?
+1
+# Observation: "kind": "unknown" (wrong), "hint": null (hint dropped).
+# A claw switching on error kind has no way to distinguish this from genuine "unknown" errors.
+
+# Same pattern for empty prompt:
+$ claw ""
+[error-kind: unknown]
+error: empty prompt: provide a subcommand (run `claw --help`) or a non-empty prompt string
+$ echo $?
+1
+
+$ claw --output-format json ""
+{"error":"empty prompt: provide a subcommand (run `claw --help`) or a non-empty prompt string","hint":null,"kind":"unknown","type":"error"}
+$ echo $?
+1
+```
+
+**Impact.**
+1. **Error-kind contract drift.** Typed error contract (§4.44) enumerates `parse | usage | unknown` as distinct classes. Classifying known parse errors as `unknown` means any claw dispatching on `error.kind == "cli_parse"` misses the prompt-subcommand and empty-prompt paths. Claws have to either fall back to substring matching the `error` prose (defeating the point of typed errors) or over-match on `unknown` (losing the distinction between "we know this is a parse error" and "we have no idea what this error is").
+
+2. **Hint field asymmetry.** Text mode users see the actionable hint. JSON mode consumers (the primary audience for typed errors) do not. A claw parsing the JSON envelope and deciding how to surface the error to its operator loses the "Run `claw --help` for usage." pointer entirely.
+
+3. **Joins error-quality family** (#179, #181, §4.44 typed envelope): each of those cycles locked in that errors should be truthful + complete + consistent across channels. This pinpoint shows two unfixed leaks: (a) the classifier's keyword list is incomplete, (b) the hint-appending code path bypasses the envelope.
+
+**Recommended fix shape.**
+
+Two atomic changes:
+
+1. **Add prompt-related patterns to `classify_error_kind()`** (main.rs:246-280):
+```rust
+} else if message.contains("prompt subcommand requires") {
+    "cli_parse"  // or "missing_argument"
+} else if message.contains("empty prompt:") {
+    "cli_parse"  // or "usage"
+```
+
+2. **Unify hint plumbing.** Move the "Run `claw --help` for usage." trailer logic into the shared error-rendering path BEFORE the JSON envelope is built, so `split_error_hint()` can capture it. Currently the trailer is added only in the text-mode stderr write at main.rs:234-242.
+
+**Regression.** Add golden-fixture tests for:
+- `claw prompt` → JSON envelope has `kind: "cli_parse"` (or chosen class), `hint` non-null
+- `claw ""` → same
+- `claw "   "` → same
+- Cross-mode parity: text mode and JSON mode carry the same hint content (different wrapping OK)
+
+**Blocker.** None. ~20 lines Rust, straightforward.
+
+**Priority.** Medium. Not red-state (errors ARE surfaced and exit codes ARE correct), but real contract drift that defeats the typed-error promise. Any claw doing typed-error dispatch on prompt-path errors currently falls back to substring matching.
+
+**Source.** Jobdori cycle #33 proactive dogfood 2026-04-22 22:30 KST in response to Clawhip pinpoint nudge. Probed empty-prompt and prompt-subcommand error paths; found classifier gap + hint drop. Joins §4.44 typed-envelope contract gap family (#90, #91, #92, #110, #115, #116, #130, #179, #181). Natural bundle: **#130 + #179 + #181 + #247** — JSON envelope field-quality quartet: #130 (export errno strings lose context), #179 (parse errors need real messages), #181 (exit_code must match process), **#247 (error-kind classification + hint plumbing incomplete)**.
+
+**Related prior work.**
+- §4.44 typed error envelope contract (drafted 2026-04-20 jointly with gaebal-gajae)
+- #179 (parse-error real message quality) — claws consuming envelope expect truthful error
+- #181 (envelope.exit_code matches process exit) — cross-channel truthfulness
+- #30 (cycle #30: OPT_OUT rejection tests) — classification contracts deserve regression tests
