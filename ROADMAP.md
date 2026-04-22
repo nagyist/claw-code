@@ -6794,6 +6794,8 @@ Natural bundle: **#247 + #248 + #249** — classifier/envelope completeness swee
 
 ## Pinpoint #250. CLI surface parity gap between Python audit harness and Rust binary — SCHEMAS.md documents `list-sessions`/`delete-session`/`load-session`/`flush-transcript` as CLAWABLE top-level subcommands, but the Rust `claw` binary routes these through the `_other => Prompt` fall-through arm, emitting `missing_credentials` instead of running the documented operation
 
+**STATUS: 🟡 SCOPE-REDUCED (cycle #46, 2026-04-23)** — #251's implementation work (Option A) is closed: the 4 verbs now route locally and do not emit `missing_credentials`. SCHEMAS.md updated cycle #46 to document the actual binary envelope shapes (with ⚠️ Stub markers on `delete-session`/`flush-transcript`). **Option C (reject-with-redirect) is moot** — no verbs to redirect away from. **Remaining work = Option B (documentation scope alignment)**: harmonize field names (`id` vs `session_id`, `updated_at_ms` vs `last_modified`, etc.) across actual and aspirational shapes, and add common-envelope fields (`timestamp`, `exit_code`, `output_format`, `schema_version`). This is a future cleanup, not blocking any user-visible behavior.
+
 **Gap.** SCHEMAS.md at the repo root defines a JSON envelope contract for 14 CLAWABLE top-level subcommands including `list-sessions`, `delete-session`, `load-session`, and `flush-transcript`. The Python audit harness at `src/main.py` implements all 14. The Rust `claw` binary at `rust/crates/rusty-claude-cli/` does NOT have these as top-level subcommands — session management lives behind `--resume <id> /session list` via the REPL slash command path.
 
 A claw following SCHEMAS.md as the canonical contract runs `claw list-sessions --output-format json` and hits the Rust binary's `_other => Prompt` fall-through arm (same code path as the now-closed parser-level trust gap quintet #108/#117/#119/#122/#127). The literal token `"list-sessions"` is sent as a prompt to the LLM, which immediately fails with `missing Anthropic credentials` because the prompt path requires auth.
@@ -6875,6 +6877,8 @@ Natural bundle: **#127 + #250** — parser-level fall-through pair with a class 
 ---
 
 ## Pinpoint #251. Session-management verbs (`list-sessions`/`delete-session`/`load-session`/`flush-transcript`) fall through to Prompt dispatch at parse time before credential resolution — wrong error CLASS is emitted (auth) for what should be local session-store operations
+
+**STATUS: ✅ CLOSED (cycle #45, 2026-04-23)** — commit `dc274a0` on `feat/jobdori-251-session-dispatch`. 4 CliAction variants + 4 parser arms + 4 dispatcher arms. `list-sessions` and `load-session` fully functional; `delete-session` and `flush-transcript` stubbed with `not_yet_implemented` local errors (satisfies #251 acceptance criterion — no `missing_credentials` fall-through). All 180 binary tests + 466 library tests + 95 compat tests pass. Dogfood-verified on clean env (no credentials). Pushed for review.
 
 **Gap.** This is the **dispatch-order framing** of the parity symptom filed at #250. Where #250 says "the surface is missing on the canonical binary and SCHEMAS.md promises it," #251 says "the underlying mechanism is a top-level parser fall-through that happens BEFORE the dispatcher can intercept the verb, so callers get `missing_credentials` instead of any session-layer response at all."
 
