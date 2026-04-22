@@ -8454,3 +8454,65 @@ This audit lens has now found 3 instances (#122, #122b, #161) in fewer than 10 c
 
 ---
 
+
+---
+
+## Pinpoint #162. USAGE.md missing sections for binary verbs: `dump-manifests`, `bootstrap-plan`, `acp`, `export`
+
+**Status: 📋 FILED (cycle #67, 2026-04-23 03:36 Seoul).**
+
+**Surface.** `claw --help` lists verbs that are not documented in USAGE.md:
+
+```
+claw dump-manifests [--manifests-dir PATH]
+claw bootstrap-plan
+claw acp [serve]
+claw export  (shown in help, scope unclear)
+```
+
+USAGE.md covers `init`, `doctor`, `status`, `sandbox`, `system-prompt`, `agents`, `mcp`, `skills`, but not the above four.
+
+**Impact.** Low-medium. Users who discover these verbs from help text have no USAGE guidance. The binary documents them inline (help text), but the centralized guide is incomplete.
+
+**Repro.** Parity audit (cycle #67):
+```bash
+claw --help | grep "^  claw "
+# See dump-manifests, bootstrap-plan, acp, export listed
+
+# Cross-check against USAGE.md
+grep -E "dump-manifests|bootstrap-plan" USAGE.md
+# 0 results
+```
+
+**Root cause.** These verbs were added to the binary but USAGE.md sections were either:
+- Never written (dump-manifests, bootstrap-plan)
+- Written but incomplete (acp, export)
+
+**Fix shape (~30-50 lines per verb, plus examples):**
+
+For each missing verb, add a section to USAGE.md following the pattern of existing sections:
+
+```markdown
+### `dump-manifests` — Export plugin/MCP manifests
+
+Show or export the built-in MCP tool manifests in JSON format.
+
+\`\`\`bash
+claw dump-manifests
+claw dump-manifests --manifests-dir /tmp/export
+\`\`\`
+
+[description of what happens, when to use]
+```
+
+**Acceptance.**
+- All four verbs have dedicated USAGE.md sections with examples
+- Each section explains when to use the verb and what it outputs
+- Parity audit re-run shows 100% coverage (no `claw --help` verb left undocumented in USAGE.md)
+
+**Classification.** Documentation-completeness bug (sibling to #130 help-parity family, but for top-level USAGE guide).
+
+**Dogfood session.** Cycle #67 parity audit on `/tmp/jobdori-251` binary.
+
+---
+
