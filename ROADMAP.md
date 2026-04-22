@@ -9819,3 +9819,34 @@ All four were emitting `kind: "unknown"` in JSON envelope.
 
 **Closed:** Yes — shipped in cycle #95, feature branch `feat/jobdori-168c-emission-routing`, commit `1a4d0e4`.
 
+
+## Pinpoint #153. README/USAGE missing "add binary to PATH" and "verify install" bridge — SHIPPED (cycle #96, 2026-04-23 07:52 Seoul)
+
+**Gap.** USAGE.md had "Install / build the workspace" section with build command, but immediately jumped to "Quick start" examples. Missing:
+1. How to add the compiled binary to system PATH (symlink vs export)
+2. How to verify the install works
+3. Troubleshooting guide for common PATH issues
+
+Developers building from source had to figure out either `./rust/target/debug/claw` every time or guess how to add the binary to PATH.
+
+**Fix shipped.** Commit `6212f17` on `feat/jobdori-168c-emission-routing`.
+
+Added two new subsections under "## Install / build the workspace":
+
+**"### Add binary to PATH"**
+- Option 1: Symlink to existing PATH directory (most portable)
+- Option 2: Add binary directory to PATH via shell rc file (direct approach)
+- Includes verification step (`which claw`)
+
+**"### Verify install"**
+- Three health checks: `claw version`, `claw doctor`, `claw --help`
+- Troubleshooting guide if `claw: command not found`
+  - Check that PATH-dir is in `$PATH`
+  - Verify symlink or binary exists
+  - Show user how to diagnose
+
+**Tests:** 225/225 pass (doc-only change).
+
+**Family:** Discoverability / bridge documentation. Related: #155 (help/USAGE parity).
+
+**Closed:** Yes — shipped in cycle #96, feature branch `feat/jobdori-168c-emission-routing`, commit `6212f17`.
