@@ -7920,3 +7920,81 @@ A naive fix — intercepting `rest.len() > 1 && bare_slash_command_guidance(rest
 
 ---
 
+
+---
+
+## Principle: When Queue Is Saturated, Integration Bandwidth IS The Constraint
+
+**Source:** gaebal-gajae framing on cycle #62 status (2026-04-23 03:04 Seoul). Key quote: "The actual constraint is **integration bandwidth**, not missing pinpoints. If we keep moving code, the best next bounded implementation target is still #249; if we optimize throughput, the best move is review/merge pressure on the 12 queued branches instead of spawning branch 13."
+
+### Statement
+
+With N review-ready branches awaiting review (N ≥ 5), the **rate-limiting resource** shifts from "find bugs" to "get code merged." Every new branch past N:
+
+1. Increases cognitive load on reviewer (has to context-switch across N+1 surfaces)
+2. Increases rebase probability (each new branch forks from increasingly-stale main)
+3. Duplicates review signal (similar patterns reviewed multiple times)
+4. Delays ALL queued branches by compounding the backlog
+
+### The Shift In Optimization Target
+
+**When queue is small (N < 5):** Find bugs, ship code. Branches are investments; review comes fast.
+
+**When queue is saturated (N ≥ 5):** Focus on throughput. Actions:
+- Prep PR-ready summaries for highest-priority queued branches
+- Do pre-review self-audit (explain the change, predict reviewer concerns)
+- Group related branches for batch review (e.g., help-parity family, suffix-guard family)
+- Consolidate smaller fixes into meta-PRs if appropriate
+- **NOT:** Spawn branch 13 before branch 1 lands
+
+### How Cycle #61 Violated This
+
+Cycle #61 attempted a fix on #160 (resume + args). When the fix broke 3 tests, I didn't just file the investigation — I had already created the branch `feat/jobdori-160-resume-slash-dispatch` (locally). The revert was clean, but **the branch creation itself was premature work.**
+
+Correct sequence:
+1. Discover bug via dogfood ✅
+2. File pinpoint ✅
+3. Attempt fix in scratch buffer (no branch) ❌ (I branched first)
+4. If fix works AND queue is saturated: file branch-ready patch as ROADMAP attachment
+5. If fix requires design decision: file investigation update
+
+Branch creation should be the LAST step, not the first.
+
+### Applied Going Forward
+
+Cycle #62 onward:
+
+**Dogfood cycles (bug discovery):**
+- Probe surface
+- File pinpoint with full trace
+- Implement fix in scratch (git stash or temp file)
+- Verify tests pass
+- **Only then:** create branch and push
+
+**Integration cycles (queue throughput):**
+- Review 1-2 queued branches against current main
+- Rebase if needed
+- Prep PR description / expected reviewer Q&A
+- Flag for reviewer attention if it's been stale
+
+### Anti-Pattern
+
+❌ **Queue-insensitive branching.** Creating new branches when queue has 12+ pending. Compounds the problem.
+
+❌ **Speculative implementation.** Implementing fixes before design questions resolve (cycle #61 #160 attempt). Burns time that could go to queued branches.
+
+❌ **Branch-as-scratch.** Using `feat/jobdori-N` branches for exploration. Use `/tmp/scratch-N/` or a stashed WIP instead.
+
+### The Scale Shift
+
+At queue N=12, even a 5-minute branch creation compounds:
+- 12 existing branches × 1 minute context-switch cost = 12-minute reviewer load
+- +1 new branch = 13 × 1 = 13-minute load (8% reviewer tax increase)
+- Over 10 cycles: 80 minutes extra reviewer load for marginal velocity gain
+
+At queue N=2, branch creation is nearly free.
+
+**Policy:** When N ≥ 5, every new branch requires explicit justification (cycle type: velocity *and* reviewer-ready).
+
+---
+
