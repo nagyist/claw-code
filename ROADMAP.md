@@ -8527,3 +8527,84 @@ claw dump-manifests --manifests-dir /tmp/export
 
 ---
 
+
+---
+
+## Doctrine Extension: CLI Discoverability Chain
+
+**Source:** gaebal-gajae validation on cycle #68 closure (2026-04-23 03:40 Seoul). Key reframe: "CLI discoverability chain restoration" (not just doc-adding).
+
+### Statement
+
+A **discoverability chain** consists of three sequential steps:
+1. **Surface existence:** the verb appears in `claw --help`
+2. **Learning guide:** the verb is documented in USAGE.md with purpose + example
+3. **Intentional use:** the user understands when/why to use it
+
+Broken chains create **abandoned verbs**: users see them in help, have nowhere to learn, and either guess or ignore them.
+
+### The Three Chain Types
+
+| Chain type | Surface | Learning guide | Example |
+|---|---|---|---|
+| **Help-only** | ✅ `claw --help` | ❌ no USAGE section | User confused |
+| **Broken** (before #162) | ✅ help lists verb | ❌ USAGE missing | Users abandon verb |
+| **Complete** (after #162) | ✅ help lists verb | ✅ USAGE explains | Users understand intent |
+
+### #162 Closed A Broken Chain
+
+**Before cycle #67 audit:** 4 verbs had help-only chains:
+- `dump-manifests` — discoverable, not learnable
+- `bootstrap-plan` — discoverable, not learnable
+- `acp` — discoverable, not learnable
+- `export` — discoverable, not learnable
+
+**After cycle #68 completion:** All 4 chains are now complete.
+
+**Metric:** Help coverage → USAGE coverage: 8/12 (67%) → 12/12 (100%).
+
+### Why Chains Matter At Scale
+
+When N ≥ 5 verbs, partial discoverability becomes a friction multiplier:
+- **1 broken chain:** user learns manually or gives up (acceptable loss)
+- **4 broken chains:** users assume verbs are unfinished or broken; confusion spreads
+- **10+ broken chains:** the `--help` output becomes a **lie** (claims features exist, docs don't support them)
+
+At queue saturation (14+ branches pending), completing chains is integration-support work: **every verb a reviewer has to guess about is cognitive load we could have prevented.**
+
+### Relationship To Existing Principles
+
+| Principle | Governs |
+|---|---|
+| **Diagnostic-strictness** (cycle #57) | Diagnostic surfaces must reflect runtime reality |
+| **Discoverability-chain** (cycle #68 extension) | Discovered surfaces must have learning paths |
+| **Integration-support artifacts** (cycle #64) | Docs that reduce reviewer friction are first-class |
+
+These three form the **user-facing-surface triad:**
+1. Diagnostic surfaces must be truthful
+2. Discovered surfaces must be learnable
+3. Docs that support discovery are as valuable as code
+
+### Anti-Pattern
+
+❌ **Help-only verbs in stable CLI** — once a verb hits `--help`, add USAGE before releasing.
+❌ **Undocumented features** — if it's in `--help`, it's a promise to users.
+❌ **Docs that reference each other with gaps** — a broken chain in one place breaks confidence in all places.
+
+### Applied: Cycle #67–#68 Pattern
+
+Cycle #67 **detected** the gap (help exists, USAGE missing).
+Cycle #68 **closed** the gap (added USAGE sections).
+Cycle #68+ **audits** the gap (parity audit method is repeatable).
+
+This is the **detection → closure → auditing** pattern for discoverability chains.
+
+### Watch List
+
+**Verbs now at risk if USAGE sections rot or diverge:**
+- All 12 documented verbs (if USAGE docs become out-of-sync with help text, the chain breaks again)
+
+**Proactive audit:** When adding new verbs to the CLI, always add USAGE.md sections in the same commit. Don't let the chain break.
+
+---
+
