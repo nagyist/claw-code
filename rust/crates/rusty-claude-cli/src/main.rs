@@ -264,6 +264,16 @@ fn classify_error_kind(message: &str) -> &'static str {
         "no_managed_sessions"
     } else if message.contains("unrecognized argument") || message.contains("unknown option") {
         "cli_parse"
+    } else if is_unknown_verb_option_error(message) {
+        // #248: verb-qualified option rejections like `unknown system-prompt option:`,
+        // `unknown export option:`, `unknown dump-manifests option:` are parse errors,
+        // not `unknown`. Without this they leak out of the typed-error contract the
+        // same way #247 did for prompt-related messages.
+        "cli_parse"
+    } else if message.contains("unknown subcommand:") || message.contains("unknown slash command") {
+        // #248 companion: subcommand-level mistypes are also parse failures,
+        // not mystery `unknown` errors. `parse_command_token` emits these.
+        "cli_parse"
     } else if message.contains("invalid model syntax") {
         "invalid_model_syntax"
     } else if message.contains("is not yet implemented") {
@@ -276,6 +286,42 @@ fn classify_error_kind(message: &str) -> &'static str {
         "api_http_error"
     } else {
         "unknown"
+    }
+}
+
+/// #248: Returns true when the error message is a verb-qualified "unknown
+/// … option:" rejection produced by a subcommand option parser.
+///
+/// These messages have the shape `unknown <verb> option: <arg>` and are
+/// emitted from subcommand-specific option parsing paths (system-prompt,
+/// export, dump-manifests, etc.). They are parse errors by construction:
+/// the CLI successfully identified the verb but failed to recognize one of
+/// its flags. Left unclassified they were leaking out as `kind: "unknown"`,
+/// which defeats typed-error dispatch for claws that route on parse failures.
+///
+/// Detection is kept intentionally narrow (must start with `"unknown "`,
+/// must contain `" option:"`) so generic text happening to contain either
+/// substring in isolation does not get hijacked.
+pub fn is_unknown_verb_option_error(message: &str) -> bool {
+    // #248: matches only the shape `unknown <verb> option: <arg>` where <verb>
+    // is a single token (no spaces). Verb-qualified rejections look like:
+    //   "unknown system-prompt option: --json"
+    //   "unknown export option: --bogus"
+    // but NOT:
+    //   "unknown option: --foo" (missing verb)
+    //   "unknown subcommand: foo" (wrong category)
+    if !message.starts_with("unknown ") || !message.contains(" option:") {
+        return false;
+    }
+    // Ensure there's a non-empty, space-free verb between `unknown ` and ` option:`.
+    if let Some(before_option) = message.split(" option:").next() {
+        if before_option.len() <= 8 {
+            return false; // "unknown " only, no verb
+        }
+        let verb = &before_option[8..]; // Everything after "unknown "
+        !verb.contains(' ') // Single-token verb (no spaces)
+    } else {
+        false
     }
 }
 
@@ -9015,7 +9061,7 @@ mod tests {
         format_resume_report, format_status_report, format_tool_call_start, format_tool_result,
         format_ultraplan_report, format_unknown_slash_command,
         format_unknown_slash_command_message, format_user_visible_api_error,
-        classify_error_kind,
+        classify_error_kind, is_unknown_verb_option_error,
         merge_prompt_with_stdin, normalize_permission_mode, parse_args, parse_export_args,
         parse_git_status_branch, parse_git_status_metadata_for, parse_git_workspace_summary,
         parse_history_count, permission_policy, print_help_to, push_output_block,
@@ -10432,6 +10478,71 @@ mod tests {
         assert_eq!(classify_error_kind("unsupported resumed command: /blargh"), "unsupported_resumed_command");
         assert_eq!(classify_error_kind("api failed after 3 attempts: ..."), "api_http_error");
         assert_eq!(classify_error_kind("something completely unknown"), "unknown");
+    }
+
+    #[test]
+    fn classify_error_kind_covers_verb_qualified_unknown_options_248() {
+        // #248: verb-qualified unknown-option rejections must classify as
+        // `cli_parse`, matching how the unqualified `unknown option` path
+        // already classifies. Regression guard — without this, typed-error
+        // dispatch on subcommand option errors was leaking to `unknown`.
+        assert_eq!(
+            classify_error_kind("unknown system-prompt option: --json"),
+            "cli_parse",
+            "system-prompt verb option errors must be cli_parse"
+        );
+        assert_eq!(
+            classify_error_kind("unknown export option: --bogus"),
+            "cli_parse",
+            "export verb option errors must be cli_parse"
+        );
+        assert_eq!(
+            classify_error_kind("unknown dump-manifests option: --bogus"),
+            "cli_parse",
+            "dump-manifests verb option errors must be cli_parse"
+        );
+        // Subcommand-level mistypes also classify as cli_parse now.
+        assert_eq!(
+            classify_error_kind("unknown subcommand: staatus"),
+            "cli_parse",
+            "unknown subcommand must be cli_parse"
+        );
+        assert_eq!(
+            classify_error_kind("unknown slash command outside the REPL: /blargh"),
+            "cli_parse",
+            "unknown direct slash command must be cli_parse"
+        );
+        // Specificity guard: text that merely mentions `unknown` or `option`
+        // without the verb-qualified shape must still fall through. The
+        // detector requires `starts_with("unknown ")` AND `contains(" option:")`.
+        assert_eq!(
+            classify_error_kind("something totally unknown happened while processing options"),
+            "unknown",
+            "loose prose mentioning unknown/options must still fall through"
+        );
+        assert_eq!(
+            classify_error_kind("unknown runtime failure: widget exploded"),
+            "unknown",
+            "`unknown <anything>` without ` option:` must not get hijacked"
+        );
+    }
+
+    #[test]
+    fn is_unknown_verb_option_error_only_matches_verb_qualified_shape_248() {
+        // #248: lock the detector's scope. Must match only the exact shape
+        // `unknown <verb> option: <arg>`.
+        assert!(is_unknown_verb_option_error(
+            "unknown system-prompt option: --json"
+        ));
+        assert!(is_unknown_verb_option_error("unknown export option: --bogus"));
+        assert!(is_unknown_verb_option_error(
+            "unknown dump-manifests option: --bogus"
+        ));
+        // Negatives.
+        assert!(!is_unknown_verb_option_error("unknown subcommand: foo"));
+        assert!(!is_unknown_verb_option_error("unknown option: --foo"));
+        assert!(!is_unknown_verb_option_error("something is unknown option:"));
+        assert!(!is_unknown_verb_option_error(""));
     }
 
     #[test]
