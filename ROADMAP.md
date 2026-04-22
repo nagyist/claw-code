@@ -7581,3 +7581,88 @@ File as permanent principle in CLAUDE.md or PHILOSOPHY.md in a follow-up cycle (
 
 ---
 
+
+---
+
+## Audit Checklist: Diagnostic-Strictness Family (#122, #122b, future)
+
+**Source:** Cycles #57–#58. Principle: "Diagnostic surfaces must be at least as strict as runtime commands." gaebal-gajae's framing: "진단 표면이 runtime 현실을 반영해야 한다" (Diagnostic surface must reflect runtime reality).
+
+### When to Apply
+
+**After every runtime preflight addition or modification:**
+
+1. Locate the check in `CliAction::Prompt` or `CliAction::Repl` handler
+2. Ask: "Does `render_doctor_report()` perform the same check?"
+3. If no: file a sibling pinpoint (e.g., #122 → #122b)
+4. If yes but with weaker message: audit the *message* for actionability
+
+### Checklist for New Preflights
+
+```
+□ Stale-base condition
+  ✅ Prompt: run_stale_base_preflight()
+  ✅ REPL: run_stale_base_preflight()
+  ✅ Doctor: now calls detect_broad_cwd() in check_workspace_health() [#122b]
+  
+□ Broad working directory
+  ✅ Prompt: enforce_broad_cwd_policy()
+  ✅ REPL: enforce_broad_cwd_policy() [assumed, per cycle #57 context]
+  ✅ Doctor: now reports in check_workspace_health() [#122b]
+  
+□ Auth credential availability
+  ⚠️  Prompt: checked implicitly in LiveCli::new()
+  ⚠️  REPL: checked implicitly in LiveCli::new()
+  ❓ Doctor: check_auth_health() exists but may miss some auth paths runtime checks
+  → File #157 if runtime auth checks are stricter than doctor reports
+  
+□ Sandbox configuration
+  ⚠️  Prompt: [implicit in runtime config loading]
+  ⚠️  REPL: [implicit in runtime config loading]
+  ❓ Doctor: check_sandbox_health() exists but completeness unclear
+  → Audit whether doctor reports ALL failure modes that runtime would hit
+  
+□ Hook validation
+  ⚠️  Prompt: hooks loaded in worker boot [implicit]
+  ⚠️  REPL: hooks loaded in worker boot [implicit]
+  ❓ Doctor: [no dedicated check; check_system_health() may or may not cover]
+  → File #158 if hooks silently fail in runtime but doctor doesn't warn
+  
+□ Plugin manifest errors
+  ⚠️  Prompt: plugins loaded in worker boot [implicit]
+  ⚠️  REPL: plugins loaded in worker boot [implicit]
+  ❓ Doctor: [no dedicated check]
+  → File #159 if plugin load errors silence in doctor but fail at runtime
+```
+
+### Applied Instances
+
+| # | Preflight | Runtime Paths | Doctor Check | Status |
+|---|---|---|---|---|
+| #122 | Stale-base condition | Prompt, REPL | Added to doctor | ✅ SHIPPED |
+| #122b | Broad working directory | Prompt, REPL | Added to workspace health | ✅ SHIPPED |
+| #157 (filed) | Auth credentials | LiveCli::new() | Audit check_auth_health() | 📋 FILED |
+| #158 (filed) | Hook validation | Worker boot | Audit/add check | 📋 FILED |
+| #159 (filed) | Plugin manifests | Worker boot | Audit/add check | 📋 FILED |
+
+### Why This Matters
+
+When a diagnostic command reports success but runtime would fail, users lose trust in the diagnostic surface. Over time, they stop consulting it as a pre-flight gate and run the actual command instead—defeating the purpose of `doctor`.
+
+Doctrinal fix: **Doctor is not a separate system; it's a truthful mirror of runtime constraints.** If runtime refuses X, doctor must warn about X. If doctor says green, the user can rely on that for go/no-go decisions.
+
+### Pattern for Future Fixes
+
+```
+1. Audit cycle: "Do all N preflight checks that runtime uses also appear in doctor?"
+2. Identify gaps
+3. For each gap:
+   a. Create a dedicated check function in doctor (parallel to runtime guard)
+   b. Add to DoctorReport::checks vec
+   c. Write regression tests
+   d. Add to audit checklist above
+4. Close pinpoint when all N checks mirror runtime behavior
+```
+
+---
+
