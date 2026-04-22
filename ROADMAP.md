@@ -6473,3 +6473,80 @@ flushed=True
 **Blocker.** None. `save_session` already accepts `directory`; `QueryEnginePort.session_id` is already a settable field; the wiring is pure CLI layer.
 
 **Source.** Jobdori dogfood sweep 2026-04-22 17:58 KST — ran `flush-transcript "hello"`, got the path-plus-key=value hybrid output, then checked `--help` for the flag pair I just shipped across the triplet in #165. Realized the session-*creation* command was asymmetric with the now-symmetric management triplet. Closes the last gap in the session-lifecycle CLI surface.
+
+## Pinpoint #180. Top-level `--help` and `--version` bypass JSON envelope contract — claws cannot discover CLI surface programmatically
+
+**Gap.** The clawable protocol contract (SCHEMAS.md) guarantees that `--output-format json` produces structured output for the 14 CLAWABLE commands. But two **discoverability/metadata endpoints** that claws need before dispatching work fall outside this contract:
+
+1. **`--help` (top-level and subcommand):** Returns human-readable text even with `--output-format json`, exits 0. Claws asking "what commands does this version of claw-code expose?" get unparsable text.
+
+2. **`--version`:** Does not exist at all. Claws cannot check CLI/schema version without invoking a command and parsing the envelope's `schema_version` field (which requires a side-effectful call, e.g., `bootstrap ""`).
+
+**Repro.**
+```bash
+# Test 1: top-level --help in JSON mode
+$ claw --help --output-format json
+usage: main.py [-h] {summary,manifest,...}
+Python porting workspace for the Claude Code rewrite effort
+$ echo $?
+0
+# stdout is text, not JSON. Claws that parse stdout get human help.
+
+# Test 2: subcommand --help in JSON mode
+$ claw bootstrap --help --output-format json
+usage: main.py bootstrap [-h] [--limit LIMIT] [--output-format {text,json}]
+                         prompt
+# Same problem at subcommand level.
+
+# Test 3: --version doesn't exist
+$ claw --version
+usage: main.py [-h] ...
+main.py: error: the following arguments are required: command
+# No version surface at all.
+```
+
+**Impact.**
+
+1. **Claws cannot check version compatibility before dispatch.** A claw receiving a task from an orchestrator needs to know: "does this claw-code install have `turn-loop` (added in some version)? Does the envelope format match `schema_version` 1.0 or 1.1?" Without `--version`, the claw must invoke a command and inspect the envelope's `schema_version` field. This is side-effectful (may create a session, may flush a transcript, may affect billing if provider calls happen).
+
+2. **Claws cannot enumerate the CLI surface.** `--help` is the natural introspection endpoint. Right now claws building a dispatcher must either (a) parse human help text (brittle), (b) call each of the 14 commands and see which exit cleanly, or (c) hardcode the list in their code (brittle across versions).
+
+3. **Discoverability governance is incomplete.** Post-cycles #178/#179, parse errors emit envelopes. But the natural "show me what exists" queries still fall outside the protocol.
+
+**Root cause.**
+- `parser.add_argument('--help', '-h')` is implicit argparse default; its handler prints to stdout and exits 0. No hook to route through JSON mode.
+- `parser.add_argument('--version')` was never added to the top-level parser.
+
+**Fix shape (~40 lines).**
+
+*Stage A — `--version` addition (smallest, isolated).*
+1. Add `parser.add_argument('--version', action='version', version=...)` to top-level parser.
+2. Version string pulls from a single constant (e.g., `CLAW_CODE_VERSION = '0.1.0'`).
+3. When `--output-format json` is also passed, intercept and emit envelope with fields: `{command: '--version', version: '0.1.0', schema_version: '1.0', clawable_surfaces: [14 names], opt_out_surfaces: [12 names]}`.
+
+*Stage B — `--help` JSON routing (trickier, hooks argparse default).*
+4. Subclass ArgumentParser or use custom HelpAction.
+5. When `--help --output-format json` detected, emit envelope with: `{command: 'help', subcommand: None, commands: [{name, description, clawable: bool}], ...}`.
+6. Subcommand-level: `{command: 'help', subcommand: 'bootstrap', arguments: [{name, type, required, help}], ...}`.
+
+*Stage C — discovery metadata.*
+7. Consider adding `claw schema-info --output-format json` as explicit endpoint (alongside --version). Emits: `{schema_version, clawable_surfaces, opt_out_surfaces, error_kinds, supported_envelope_fields}`. This is the "pre-dispatch discovery" endpoint claws need.
+
+**Acceptance.**
+- `claw --version` emits a version string in text mode
+- `claw --version --output-format json` emits a structured envelope with version + surface lists
+- `claw --help --output-format json` emits a structured envelope listing commands (with descriptions)
+- `claw bootstrap --help --output-format json` emits a structured envelope listing arguments
+- Backward compat: `claw --help` in text mode unchanged byte-for-byte
+
+**Blocker.** None. argparse's built-in HelpAction can be subclassed (standard pattern). `--version` is a one-line addition. The `schema-info` command is optional (Stage C); Stages A+B close the core gap.
+
+**Priority.** Medium. Not a red-state bug (no claw is blocked), but a real gap for multi-version claw-code installations. Orchestrators running claw-code in subprocess would benefit immediately.
+
+**Source.** Jobdori proactive dogfood sweep 2026-04-22 20:58 KST (cycle #24) — ran `claw --help --output-format json` expecting envelope per #178/#179 contract; got text output. Then checked `--version`; not implemented. Filed as natural follow-up to parser-front-door work. Closes the last major discoverability gap.
+
+**Related prior work.**
+- #178 (parse-error envelope): structural contract — unknown commands emit envelope
+- #179 (stderr hygiene + real message): quality contract — envelope carries real error message
+- #180 (this): discoverability contract — claws can enumerate the surface before dispatching
+
