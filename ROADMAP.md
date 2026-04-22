@@ -7998,3 +7998,84 @@ At queue N=2, branch creation is nearly free.
 
 ---
 
+
+---
+
+## Cycle Pattern: #61 (Spec Discovery) + #62 (Integration Framing) = Doctrine Loop
+
+**Source:** gaebal-gajae validation on cycles #61–#62 (2026-04-23 03:07 Seoul).
+
+Key framing: "Cycle #61 found a real dispatch bug, proved the naive fix is wrong, and upgraded the problem into a proper verb-classification design pinpoint. Cycle #62 correctly treated review bandwidth as the active constraint and converted #249 from 'written code' into 'easier-to-merge work.' And: **branch creation is LAST step, not first.**"
+
+### The Pattern
+
+**Cycles don't stand alone.** When two consecutive cycles reinforce each other's lessons, they create **doctrine loops** that escape the "one-off pattern" trap:
+
+| Cycle | Type | Discovery | Doctrine |
+|---|---|---|---|
+| #61 | velocity-attempt | Found #160 bug; fix broke tests; revert clean | "Don't speculate; verify before branch" |
+| #62 | integration | Accepted reframe; prepped #249; zero new branches | "Branch creation is LAST step, not first" |
+| **Loop** | **—** | **#61 violation → #62 correction → doctrine** | **Branch-last protocol emerges** |
+
+### How The Loop Works
+
+1. **Cycle N violation** — Do something that seems efficient but creates friction (cycle #61: branch-first, test-fail, revert)
+2. **Cycle N+1 reframe** — Name the constraint that was violated (integration bandwidth)
+3. **Cycle N+2 doctrine** — Formalize into protocol (branch creation gating, scratch-first discipline)
+
+This is how **aspirational principles** become **operational doctrine**. One cycle says "this is hard," the next says "here's why," the third says "here's the protocol."
+
+### Applied So Far
+
+**Diagnostic-strictness loop (cycles #57–#59):**
+- #57: Found doctor ≠ runtime divergence (principle)
+- #58: Applied to doctor broad-cwd check (#122b)
+- #59: Formalized checklist + pre-filed audit targets (doctrine)
+
+**Typed-error loop (cycles #36–#49):**
+- #36: Found classify_error_kind gaps (discovery)
+- #41–#45: Shipped #248, #249, #251 (implementations)
+- #47: Found filesystem context losses (#130b)
+- #49: Shipped #130b fix (doctrine about context propagation)
+
+**Cycle-cadence loop (cycles #56–#59):**
+- #56: Claimed "last suffix-guard outlier" found, then #56 found another (violation)
+- #59: Named "hygiene cycles are first-class" (doctrine)
+
+**Branch-last loop (cycles #61–#62, emerging):**
+- #61: Branched first, test-failed, reverted (violation)
+- #62: Framed integration-bandwidth constraint, zero new branches (doctrine pending)
+- **#63 onward:** Test branch-last protocol in practice
+
+### Why This Matters
+
+Without the loop, a single-cycle violation is a "whoops." With the loop, it's **self-correcting evidence** for doctrine. 
+
+Future cycles can cite: "Per cycle #62, when N ≥ 5 branches are queued, branch-creation requires explicit justification. We have 12; this is #63's integration cycle, not velocity." 
+
+The doctrine is **not aspirational**; it's **evidence-backed**.
+
+### Anti-Pattern: Doctrine Without Loop
+
+❌ **"We should do code review more carefully"** (stated as rule, no incident)
+❌ **"Branch hygiene matters"** (stated as principle, not applied)
+
+✅ **Cycle #61 violated it → Cycle #62 explained why → Cycle #63+ enforces it** (doctrine emerges from violation recovery)
+
+### Upcoming Loop: #160 (Verb Classification)
+
+**Current state (end of cycle #61):**
+- #160 bug discovered (resume+arg → missing_credentials)
+- Naive fix broke 3 tests (revealed contract ambiguity)
+- Filed investigation: reserved vs. promptable verbs
+
+**Next cycle (#63+):**
+- Explicit verb classification in slash_command_specs()?
+- Reserved-verb list: resume, compact, memory, commit, pr, issue, …?
+- Promptable-verb list: explain, bughunter, clear, …?
+- Tests that lock in the classification?
+
+If cycle #63 lands #160 fix with verb table: **loop closes, doctrine formalized**.
+
+---
+
