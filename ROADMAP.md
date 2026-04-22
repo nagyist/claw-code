@@ -6580,7 +6580,30 @@ main.py: error: the following arguments are required: command
 
 ---
 
-## Pinpoint #247. `classify_error_kind()` misses prompt-related parse errors — "empty prompt" and "prompt subcommand requires" classified as `unknown` instead of `cli_parse`; JSON envelope also drops the `Run claw --help for usage` hint
+## Pinpoint #247. `classify_error_kind()` misses prompt-related parse errors — "empty prompt" and "prompt subcommand requires" classified as `unknown` instead of `cli_parse`; JSON envelope also drops the `Run claw --help for usage` hint **[CLOSED 2026-04-22 cycle #34]**
+
+**Status.** CLOSED. Fix landed on `feat/jobdori-247-classify-prompt-errors` (cycle #34, Jobdori, 2026-04-22 22:4x KST). Two atomic edits in `rust/crates/rusty-claude-cli/src/main.rs` + one unit test + four integration tests. Verified on the compiled `claw` binary: both prompt-related parse errors now classify as `cli_parse`, and JSON envelopes for the bare-`claw prompt` path now carry the same `Run \`claw --help\` for usage.` hint as text mode. Regression guard locks in that the existing `unrecognized argument` hint/kind path is untouched.
+
+**What landed.**
+1. `classify_error_kind()` gained two explicit branches for `prompt subcommand requires` and `empty prompt:`, both routed to `cli_parse`. Patterns are specific enough that generic prompt-adjacent messages still fall through to `unknown` (locked by unit test).
+2. JSON error path in `main()` now synthesizes the `Run \`claw --help\` for usage.` hint when `kind == "cli_parse"` AND the message itself did not already embed one (prevents duplication on the `empty prompt: … (run \`claw --help\`)` path which carries guidance inline).
+3. Regression tests added: one unit test (`classify_error_kind_covers_prompt_parse_errors_247`) + four integration tests in `tests/output_format_contract.rs` covering bare `claw prompt`, `claw ""`, `claw "   "`, and the `doctor --foo` unrecognized-argument regression guard.
+
+**Cross-channel parity after fix.**
+
+```
+$ claw --output-format json prompt
+{"error":"prompt subcommand requires a prompt string","hint":"Run `claw --help` for usage.","kind":"cli_parse","type":"error"}
+
+$ claw --output-format json ""
+{"error":"empty prompt: provide a subcommand (run `claw --help`) or a non-empty prompt string","hint":null,"kind":"cli_parse","type":"error"}
+```
+
+Text mode remains unchanged (still prints `[error-kind: cli_parse]` + trailer). Both channels now carry `kind == cli_parse` and the hint content is either explicit (JSON field) or embedded (inline in `error`), closing the typed-envelope asymmetry flagged in the pinpoint.
+
+**Original gap (preserved for history below).**
+
+## Pinpoint #247 (original). `classify_error_kind()` misses prompt-related parse errors — "empty prompt" and "prompt subcommand requires" classified as `unknown` instead of `cli_parse`; JSON envelope also drops the `Run claw --help for usage` hint
 
 **Gap.** Typed-error contract (§4.44) specifies an enumerated error kind set: `filesystem | auth | session | parse | runtime | mcp | delivery | usage | policy | unknown`. The `classify_error_kind()` function at `rust/crates/rusty-claude-cli/src/main.rs:246-280` uses substring matching to map error messages to these kinds. Two common prompt-related parse errors are NOT matched and fall through to `unknown`:
 
