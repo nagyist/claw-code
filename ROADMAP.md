@@ -7213,3 +7213,85 @@ Low-risk, high-clarity UX fix. Same pattern as #130c. Completes the help-parity 
 
 **Next-cycle plan:**
 Implement #130d to close the help-parity family. Stack on top of #130c branch for coherence.
+
+---
+
+## Pinpoint #130e. Help-parity sweep reveals 5 additional anomalies; 3 are dispatch-order bugs (#251-family)
+
+**Concrete observation (cycle #53 dogfood, 2026-04-23 02:00 Seoul):**
+
+Systematic help-parity sweep of all 22 top-level subcommands revealed 5 additional anomalies beyond #130c/#130d:
+
+### Category A: Dispatch-order bugs (#251-family, CRITICAL)
+
+**`claw help --help` → `missing_credentials` error**
+```bash
+$ claw help --help
+[error-kind: missing_credentials]
+error: missing Anthropic credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY...
+```
+The `help` verb with `--help` is NOT intercepted at parse time; falls through to credential check before dispatch. Should emit meta-help (explain what `claw help` does), not cred error.
+
+**`claw submit --help` → `missing_credentials` error**
+```bash
+$ claw submit --help
+[error-kind: missing_credentials]
+error: missing Anthropic credentials...
+```
+Same dispatch-order class as #251 (session verbs). `submit --help` should show help for the submit command, not attempt credential check. This is a critical discoverability gap — users cannot learn what `submit` does without credentials.
+
+**`claw resume --help` → `missing_credentials` error**
+```bash
+$ claw resume --help
+[error-kind: missing_credentials]
+error: missing Anthropic credentials...
+```
+Same pattern. `resume --help` should show help, not require credentials.
+
+### Category B: Help-surface outliers (like #130c/#130d)
+
+**`claw plugins --help` → "Unknown /plugins action '--help'"**
+```bash
+$ claw plugins --help
+Unknown /plugins action '--help'. Use list, install, enable, disable, uninstall, or update.
+```
+Treats `--help` as a subaction of plugins (list/install/enable/etc.) rather than a help flag. At least the error is specific, but wrong.
+
+**`claw prompt --help` → silent passes through, shows version + top-level help**
+```bash
+$ claw prompt --help
+claw v0.1.0
+
+Usage:
+  claw [OPTIONS]
+  ...
+```
+Shows top-level help instead of prompt-specific help. Different failure mode from silent-ignore (#130d) — this actually prints help but the wrong help.
+
+### Summary Table
+
+| Command | Observed | Expected | Class |
+|---|---|---|---|
+| `help --help` | missing_credentials | meta-help | Dispatch-order (#251) |
+| `submit --help` | missing_credentials | submit help | Dispatch-order (#251) |
+| `resume --help` | missing_credentials | resume help | Dispatch-order (#251) |
+| `plugins --help` | "Unknown action" | plugins help | Surface-parity |
+| `prompt --help` | top-level help | prompt help | Wrong help shown |
+
+### Fix Scope
+
+**Category A (dispatch-order)**: Follow #251 pattern. Add `help`, `submit`, `resume` to the parse-time help-flag interception, same as how `diff` (#130c) and `config` (#130d) handle it. This is the SAME BUG CLASS as #251 (session verbs) — parser arm dispatches before help flag is checked.
+
+**Category B (surface-parity)**: Follow #130c/#130d pattern. Add `--help` handling in the specific arms for `plugins` and `prompt`, routing to dedicated help topics.
+
+### Acceptance Criterion
+
+All 22 top-level subcommands must accept `--help` and `-h`, routing to a help topic specific to that command. No `missing_credentials` errors for help flags. No "Unknown action" errors for help flags.
+
+### Next-Cycle Plan
+
+Split into two implementations:
+- **#130e-A** (dispatch-order): fix `help`, `submit`, `resume` — high-priority, same class as #251
+- **#130e-B** (surface-parity): fix `plugins`, `prompt` — follow #130c/#130d pattern
+
+Estimated: 10-15 min each for implementation, dogfood, tests, push.
