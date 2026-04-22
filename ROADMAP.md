@@ -8876,3 +8876,49 @@ MERGE_CHECKLIST.md (Tier 3 from cycle #70) successfully guided:
 
 ---
 
+
+---
+
+## Cycle #74 Integration Checkpoint: Rebase Bottleneck Identified
+
+**Date:** 2026-04-23 04:20 Seoul.
+
+**Status:** Fresh dogfood completed; no new pinpoints found. All core verbs working correctly (doctor, mcp, skills, agents, resume, export, session management).
+
+**Blocker:** The 8 remaining review-ready branches on origin (feat/jobdori-248, #249, #122, #122b, #152-init, #152-bootstrap-plan, plus 2 others) have rebase conflicts with cycle #72's 4 merges.
+
+**Root cause:** Remote branches were created BEFORE cycle #72's help-parity + typed-error chain merged. The merged commits (0ca0344, a6f4e0d, etc.) added help topic variants and refactored parser dispatch, causing overlaps when rebasing #248/#249/#127 against new main.
+
+**Example conflict:** `feat/jobdori-127-verb-suffix-flags` tried to rebase onto main:
+- Commit 47f0fb4 adds `--json` alias to verb options
+- Cycle #72's merges added 15+ new LocalHelpTopic variants
+- Rebase conflict: enum definition changed; commit 3/3 still tries to apply changes against old structure
+
+**Options going forward:**
+
+1. **Push current main to origin, have each remote branch rebased by their authors** (e.g., gaebal-gajae rebases origin/feat/jobdori-248)
+   - Moves conflict resolution to branch author
+   - Cleanest audit trail
+   - Requires coordination
+
+2. **Pull each remote branch locally, manually rebase, force-push to origin** (scripted)
+   - Fast but opaque
+   - Creates force-push events
+   - Risk: loses original branch history if not careful
+
+3. **Create new "rebase-bridge" branches from each remote, rebase to main, merge, mark originals stale**
+   - Most auditable
+   - New branches (feat/jobdori-248-rebased, etc.)
+   - Clear precedent trail
+
+4. **Defer rebase work; focus on new pinpoints instead**
+   - Use cycle #74 to find fresh dogfood gaps
+   - Let integration backlog queue up
+   - Lower risk but delays shipping
+
+**Recommendation:** Option 1 (coordinate rebase with branch authors) is cleanest. Cycle #74 found no new bugs, which means the next highest-value work is **unblocking the queue**, not filing new pinpoints.
+
+**Action:** Post cycle #74 update with rebase situation + request branch author rebase coordination.
+
+---
+
