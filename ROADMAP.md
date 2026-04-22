@@ -7046,25 +7046,19 @@ Filesystem operation errors must emit operation name + path in error message, en
 
 ## Pinpoint #153b (follow-up). Add binary PATH setup guide to README
 
-**Concrete gap (from cycle #48 assessment):**
+**Status: ✅ CLOSED (already implemented, verified cycle #60).**
 
-#153 filed in cycle #30 but never landed. New users post-`cargo build --workspace` don't know:
-1. Where binary ends up (`rust/target/debug/claw` vs. `/usr/local/bin/claw`)
-2. How to verify build (e.g., `./rust/target/debug/claw --help`)
-3. How to add to PATH for shell integration
+**Implementation in README.md (lines 139–175):** Comprehensive PATH setup section with three options:
+1. **Symlink (macOS/Linux):** `ln -s $(pwd)/rust/target/debug/claw /usr/local/bin/claw`
+2. **cargo install:** Build and install to `~/.cargo/bin/`
+3. **Shell profile:** Add `export PATH="$(pwd)/rust/target/debug:$PATH"` to `.bashrc`/`.zshrc`
 
-**Real user friction (from #claw-code):**
-- "claw not found — did build fail?"
-- "do I need `cargo install`?"
-- "why is it at `rust/target/debug/claw` and not just `claw`?"
+Includes:
+- Binary location callout (`rust/target/debug/claw` on all platforms)
+- Verification step (`claw --help`)
+- Troubleshooting for "command not found" error
 
-**Fix shape (minimal, ~40 lines):**
-Add "Post-build: Add to PATH" section in README (after Quick start), covering:
-1. **Binary location:** `rust/target/debug/claw` (debug) or `rust/target/release/claw` (release)
-2. **Quick verification:** `./rust/target/debug/claw --help` (no install needed)
-3. **Optional PATH setup:**
-   ```bash
-   export PATH="$PWD/rust/target/debug:$PATH"
+**Dogfood verification (2026-04-23 cycle #60):** Docs are clear, comprehensive, and cover the three main user scenarios. No new friction surfaces when following README after `cargo build --workspace`
    claw --help  # should work from anywhere
    ```
 4. **Permanent setup:** Add the export to `.bashrc` / `.zshrc` if desired
