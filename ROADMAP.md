@@ -6245,3 +6245,67 @@ Remove the `[turn N]` suffix entirely. Add an optional `continuation_prompt: str
 **Blocker.** None.
 
 **Source.** Jobdori dogfood sweep 2026-04-22 10:06 KST — read `src/runtime.py:154-168`, reproduced the `[turn N]` suffix injection pattern, confirmed no system-prompt or engine-side interpretation of the suffix exists.
+
+## Pinpoint #164. `run_turn_loop` timeout returns control to caller but does not cancel the underlying `submit_message` work — wedged provider threads leak past the deadline
+
+**Gap.** The #161 fix bounds the caller-facing wait on `PortRuntime.run_turn_loop` via `ThreadPoolExecutor.submit(...).result(timeout=...)`, but `ThreadPoolExecutor.shutdown(wait=False)` does not actually cancel a thread already running `engine.submit_message`. Python's threading model does not expose safe cooperative cancellation of arbitrary blocking calls (no `pthread_cancel`-equivalent for user code), so once a turn wedges on a slow provider the thread keeps running in the background after `run_turn_loop` returns. Concretely:
+
+1. **Caller receives `TurnResult(stop_reason='timeout')` on time** — the caller-facing deadline works correctly (confirmed by 6 tests in `tests/test_run_turn_loop_timeout.py`).
+2. **But the worker thread is still executing `engine.submit_message`** — it will complete (or not) whenever the underlying `_format_output` / projected_usage computation returns, mutating the engine's `mutable_messages`, `transcript_store`, `total_usage` at an unpredictable later time.
+3. **If the caller reuses the same engine** (e.g., a long-lived CLI session or orchestration harness that pools engines), those deferred mutations land silently on top of fresh turns, corrupting the session in a way that `stop_reason` cannot signal.
+4. **If the caller spawns many turn loops in parallel**, leaked threads accumulate and the process memory/file-handle footprint grows without bound.
+
+**Repro (conceptual).**
+```python
+import time
+from src.runtime import PortRuntime
+from src.query_engine import QueryEnginePort
+from unittest.mock import patch
+
+slow_calls = []
+
+def hang_and_mutate(self, prompt, *args, **kwargs):
+    # Simulates a slow provider that eventually returns and mutates engine state.
+    time.sleep(2.0)
+    self.mutable_messages.append(f'LATE: {prompt}')  # silent mutation after timeout
+    slow_calls.append(prompt)
+    return None  # irrelevant, caller has already given up
+
+with patch.object(QueryEnginePort, 'submit_message', hang_and_mutate):
+    runtime = PortRuntime()
+    # Timeout fires at 0.2s, caller gets synthetic timeout result
+    results = runtime.run_turn_loop('x', timeout_seconds=0.2)
+    assert results[-1].stop_reason == 'timeout'
+    # But 2 seconds later the background thread still mutates the engine
+    time.sleep(2.5)
+    assert slow_calls == ['x']  # the "cancelled" turn actually ran to completion
+```
+
+**Impact on claws.**
+- Orchestration harnesses cannot safely reuse `QueryEnginePort` instances across timeouts. Every timeout implicitly requires discarding the engine, which breaks session continuity.
+- Hung threads leak across long-running claw processes (daemon-mode claws, CI workers, cron harnesses). Resource bounds are the OS's problem, not the harness's.
+- "Timeout fired, session is clean" is not actually true — `TurnResult(stop_reason='timeout')` only means "the caller got control back in time", not "the turn was cancelled".
+
+**Root cause.** Two layers:
+1. `PortRuntime.run_turn_loop` uses `executor.shutdown(wait=False)` which lets the interpreter reap the thread eventually but does not signal cancellation to the running code.
+2. `QueryEnginePort.submit_message` has no cooperative cancellation hook — no `cancel_event: threading.Event | None = None` parameter, no periodic check inside `_format_output` or the projected-usage computation, no abortable IO wrapper around any future provider calls. Even if the runtime layer wanted to ask the turn to stop, there is no receiver.
+
+**Fix shape (~30 lines, two-stage).**
+
+*Stage A — runtime layer (claws benefit immediately).*
+1. Introduce a `threading.Event` as `cancel_event`. Pass it into `engine.submit_message` via a new optional parameter.
+2. On timeout in `run_turn_loop`, set `cancel_event` before returning the synthetic timeout result so any check inside the engine can observe it.
+3. Ensure the worker thread is marked as a daemon (`ThreadPoolExecutor(max_workers=1, thread_name_prefix='claw-turn-cancellable')` — daemon=True is not directly configurable on stdlib Executor, but we can switch to `threading.Thread(daemon=True)` for the single-worker case).
+
+*Stage B — engine layer (makes Stage A effective).*
+4. `submit_message` accepts `cancel_event: threading.Event | None = None` and checks `cancel_event.is_set()` at safe cancellation points: before `_format_output`, before each mutation, before `compact_messages_if_needed`. If set, raise a `TurnCancelled` exception (or return an early `TurnResult(stop_reason='cancelled')` — exception is cleaner because it propagates through the Future).
+5. Any future network/provider call paths wrap their blocking IO in a loop that checks `cancel_event` between retries / chunks, or uses `socket.settimeout` / `httpx.AsyncClient` with a cancellation token.
+
+*Stage C — contract.*
+6. Document that `stop_reason='timeout'` now means "the turn was asked to cancel and had a fair chance to observe it". Threads that ignore cancellation (e.g., pure-CPU loops with no check) can still leak, but cooperative paths clean up.
+
+**Acceptance.** After `run_turn_loop(..., timeout_seconds=0.2)` returns a timeout result, within a bounded grace window (say 100ms) the underlying worker thread has either finished cooperatively or acknowledged the cancel event. `engine.mutable_messages` does not grow after the timeout TurnResult is returned. A reused engine can safely accept a fresh `submit_message` call without inheriting deferred mutations from the cancelled turn.
+
+**Blocker.** Python threading does not expose preemptive cancellation, so purely CPU-bound stalls inside `_format_output` or provider client libraries cannot be force-killed. The fix makes cancellation *cooperative*, not *guaranteed*. Eventually the engine will need an `asyncio`-native path with `asyncio.Task.cancel()` for real provider IO, but that is a larger refactor.
+
+**Source.** Jobdori dogfood sweep 2026-04-22 17:36 KST — filed while landing #162, following review feedback on #161 that pointed out the caller-facing timeout and underlying work-cancellation are two different problems. #161 closed the first; #164 is the second.
