@@ -6209,3 +6209,39 @@ print(path)                      # session saved with the overflow turn inside
 **Blocker.** None.
 
 **Source.** Jobdori dogfood sweep 2026-04-22 09:36 KST — traced `submit_message` mutation order in `src/query_engine.py:88-103`; confirmed append precedes budget-guard return.
+
+## Pinpoint #163. `run_turn_loop` injects `[turn N]` suffix into follow-up prompts instead of relying on conversation history — multi-turn sessions are semantically broken
+
+**Gap.** `PortRuntime.run_turn_loop` (`src/runtime.py:162`) builds subsequent turn prompts as `f'{prompt} [turn {turn + 1}]'` — appending an opaque `[turn 2]`, `[turn 3]` suffix to the *original* prompt text and re-sending it verbatim. The LLM receives `"investigate this bug [turn 2]"` on the second turn rather than a meaningful continuation or follow-up instruction. Two clawability problems:
+
+1. **Semantically wrong:** The LLM has no idea what `[turn 2]` means. It looks like user-typed annotation noise, not a continuation signal. The engine already accumulates `mutable_messages` across calls (history is preserved), so there is no need to re-send the original prompt at all — a real continuation would either send a follow-up instruction or let the engine infer the next step from history.
+2. **Claw cannot distinguish turn identity:** A claw inspecting the conversation transcript sees `investigate this bug [turn 2]` as an actual user turn, making transcript replay and analysis fragile — the `[turn N]` suffix is injected by the harness, not by the user, so it pollutes the conversation history.
+
+**Repro.**
+```python
+import sys; sys.path.insert(0, '.')
+from src.runtime import PortRuntime
+prompt = 'investigate this bug'
+for turn in range(3):
+    turn_prompt = prompt if turn == 0 else f'{prompt} [turn {turn + 1}]'
+    print(repr(turn_prompt))
+# 'investigate this bug'
+# 'investigate this bug [turn 2]'
+# 'investigate this bug [turn 3]'
+```
+
+The `[turn N]` string is never defined or documented. There is no corresponding parse path in the engine or LLM system prompt that assigns it meaning. It is instrumentation noise injected into the conversation.
+
+**Root cause.** `src/runtime.py:162` — the suffix was likely added as a debugging aid or placeholder for "distinguish turns in logs" but was never replaced with a real continuation strategy.
+
+**Fix shape (~5 lines).** On turn > 0, either:
+- Send nothing (rely on the engine's accumulated `mutable_messages` to provide context for the next model call), or
+- Send a structured continuation prompt like `"Continue."` or a claw-supplied `continuation_prompt` parameter (default: `None` = skip the extra user turn).
+
+Remove the `[turn N]` suffix entirely. Add an optional `continuation_prompt: str | None = None` parameter so callers can supply a meaningful follow-up; if `None`, skip the redundant user turn and let the model see only its own prior output.
+
+**Acceptance.** `run_turn_loop('investigate this bug', max_turns=3)` does not inject any `[turn N]` string into `engine.mutable_messages`. The conversation transcript contains exactly the turns the LLM and user exchanged, with no harness-injected annotation noise.
+
+**Blocker.** None.
+
+**Source.** Jobdori dogfood sweep 2026-04-22 10:06 KST — read `src/runtime.py:154-168`, reproduced the `[turn N]` suffix injection pattern, confirmed no system-prompt or engine-side interpretation of the suffix exists.
