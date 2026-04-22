@@ -6885,3 +6885,110 @@ Natural bundle: **#127 + #250** — parser-level fall-through pair with a class 
 - #108/#117/#119/#122/#127 (parser-level trust gap quintet)
 - Python harness `src/main.py` (14 CLAWABLE surfaces)
 - Rust binary `rust/crates/rusty-claude-cli/src/main.rs` (different top-level surface set)
+
+
+---
+
+## Pinpoint #251. Session-management verbs (`list-sessions`/`delete-session`/`load-session`/`flush-transcript`) fall through to Prompt dispatch at parse time before credential resolution — wrong error CLASS is emitted (auth) for what should be local session-store operations
+
+**Gap.** This is the **dispatch-order framing** of the parity symptom filed at #250. Where #250 says "the surface is missing on the canonical binary and SCHEMAS.md promises it," #251 says "the underlying mechanism is a top-level parser fall-through that happens BEFORE the dispatcher can intercept the verb, so callers get `missing_credentials` instead of any session-layer response at all."
+
+The two pinpoints describe the same observable failure from different layers:
+- **#250 (surface layer):** SCHEMAS.md top-level verbs aren't implemented as top-level Rust subcommands.
+- **#251 (dispatch layer):** The top-level parser has no match arm for these verbs, so they fall into the `_other => Prompt` catchall at `main.rs:1017`, which constructs `CliAction::Prompt { prompt: "list-sessions", ... }`. Downstream, the Prompt path requires credentials, and the CLI emits `missing_credentials` for a purely-local operation.
+
+**The same pattern has been fixed before** for other purely-local verbs:
+- **#145** — `plugins` was falling through to Prompt. Fix: explicit match arm at `main.rs:888-906` returning `CliAction::Plugins { ... }`.
+- **#146** — `config` and `diff` were falling through. Fix: explicit match arms at `main.rs:911-935` returning `CliAction::Config { ... }` and `CliAction::Diff { ... }`.
+
+Both fixes followed identical shape: intercept the verb at top-level parse, construct the corresponding `CliAction` variant, bypass the Prompt/credential path entirely. #251 extends this to the 4 session-management verbs.
+
+**Repro.** Dogfooded 2026-04-23 cycle #40 on main HEAD `f110333`:
+
+```bash
+$ env -i PATH=$PATH HOME=$HOME /path/to/claw list-sessions --output-format json
+{"error":"missing Anthropic credentials; export ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY ...","kind":"missing_credentials","type":"error"}
+# Expected: session-layer envelope like {"command":"list-sessions","sessions":[...]}
+# Actual: auth-layer error because the verb was treated as a prompt.
+```
+
+**Code trace (verified cycle #40).**
+- `main.rs:1017-1027` — the final `_other` arm of the top-level parser. Joins all unrecognized tokens with spaces and constructs `CliAction::Prompt { prompt: joined, ... }`.
+- Downstream, the Prompt dispatcher calls `resolve_credentials()` which emits `missing Anthropic credentials` when neither `ANTHROPIC_API_KEY` nor `ANTHROPIC_AUTH_TOKEN` is set.
+- No credential resolution would have been needed had the verb been intercepted earlier.
+
+**Relationship to #250.**
+
+| Aspect | #250 | #251 |
+|---|---|---|
+| **Layer** | Surface / documentation | Dispatch / parser internals |
+| **Framing** | Protocol vs implementation drift | Wrong dispatch order |
+| **Fix scope** | 3 options (docs scope, Rust impl, reject-with-redirect) | Narrow: add match arms mirroring #145/#146 |
+| **Evidence** | SCHEMAS.md promises ≠ binary delivers | Parser fall-through happens before the dispatcher can classify the verb |
+
+They share the observable (`missing_credentials` on a documented surface) but prescribe different scopes of fix:
+- **#250's Option A** (implement the surfaces) = **#251's proper fix** — actually wire the session-management paths.
+- **#250's Option C** (reject with redirect) = a different fix that doesn't implement the verbs but at least stops the auth-error misdirection.
+
+**Recommended sequence:**
+1. **#251 fix** (implement the 4 match arms following the #145/#146 pattern) is the principled solution — it makes the canonical binary honor SCHEMAS.md.
+2. **#250's documentation scope note** (Option B) remains valuable regardless, as a guard against future drift between the two implementations.
+3. **#250's Option C** (reject with redirect) becomes unnecessary if #251 lands — no verbs to redirect away from.
+
+**Fix shape (~40 lines).**
+
+Add 4 match arms to the top-level parser (file: `rust/crates/rusty-claude-cli/src/main.rs:~840-1015`), each mirroring the pattern from `plugins`/`config`/`diff`:
+
+```rust
+"list-sessions" => {
+    let tail = &rest[1..];
+    // list-sessions: optional --directory flag already parsed; no positional args
+    if !tail.is_empty() {
+        return Err(format!("unexpected extra arguments after `claw list-sessions`: {}", tail.join(" ")));
+    }
+    Ok(CliAction::ListSessions { output_format, directory: /* already parsed */ })
+}
+"delete-session" => {
+    let tail = &rest[1..];
+    // delete-session: requires session-id positional
+    let session_id = tail.first().ok_or_else(|| "delete-session requires a session-id argument".to_string())?.clone();
+    if tail.len() > 1 {
+        return Err(format!("unexpected extra arguments after `claw delete-session {session_id}`: {}", tail[1..].join(" ")));
+    }
+    Ok(CliAction::DeleteSession { session_id, output_format, directory: /* already parsed */ })
+}
+"load-session" => { /* same pattern */ }
+"flush-transcript" => { /* same pattern, with --session-id flag handling */ }
+```
+
+Plus `CliAction` variants, dispatcher wiring, and regression tests. Likely ~40 lines of Rust + tests if session-store operations already exist in `runtime/`.
+
+**Acceptance.** All 4 verbs emit session-layer envelopes matching the SCHEMAS.md contract:
+- `claw list-sessions --output-format json` → `{"command":"list-sessions","sessions":[...],"exit_code":0}`
+- `claw delete-session <id> --output-format json` → `{"command":"delete-session","deleted":true,"exit_code":0}`
+- `claw load-session <id> --output-format json` → `{"command":"load-session","session":{...},"exit_code":0}`
+- `claw flush-transcript --session-id <id> --output-format json` → `{"command":"flush-transcript","flushed":N,"exit_code":0}`
+
+No credential resolution is triggered for any of these paths.
+
+**Regression tests.**
+- Each verb with valid arguments: emits correct envelope, exit 0.
+- Each verb with missing required argument: emits `cli_parse` error envelope (with kind), exit 1.
+- Each verb with extra arguments: emits `cli_parse` error envelope rejecting them.
+- Regression guard: `claw list-sessions` in env-cleaned environment does NOT emit `missing_credentials`.
+
+**Blocker.** None. Bounded to 4 additional top-level match arms + corresponding `CliAction` variants + dispatcher wiring. Session-store operations may need minor extraction from `/session list` implementation.
+
+**Priority.** Medium-high. Same severity as #250 (silent misdirection on a documented surface), with sharper framing. Closing #251 automatically resolves #250's Option A and makes Option C unnecessary.
+
+**Source.** Filed 2026-04-23 00:00 KST by gaebal-gajae (conceptual filing in Discord cycle status at msg 1496526112254328902); verified and formalized into ROADMAP by Jobdori cycle #40. Natural bundle:
+- **#145 + #146 + #251** — parser fall-through fix pattern (plugins, config/diff, session-management verbs). All 3 follow identical fix shape: intercept at top-level parse, bypass Prompt/credential path.
+- **#250 + #251** — symptom/mechanism pair on the same observable failure. #250 frames it as protocol-vs-implementation drift; #251 frames it as dispatch-order bug.
+- **#99 + #127 + #250 + #251** — cred-error misdirection family. Each case: a purely-local operation silently routes through the auth-required Prompt path and emits the wrong error class.
+
+**Related prior work.**
+- #145 (plugins fall-through fix) — direct template for #251 fix shape
+- #146 (config/diff fall-through fix) — same pattern
+- #250 (surface parity framing of same failure)
+- §4.44 typed-envelope contract
+- SCHEMAS.md (specifies the 4 session-management verbs as top-level CLAWABLE surfaces)
