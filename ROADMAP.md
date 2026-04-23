@@ -11378,3 +11378,70 @@ Execute Phase 1 bundle sequence (Priority 1–5 + independents). Target executio
 ---
 
 **End of Phase 0 + Dogfood Cycles. All unaudited surfaces probed. Phase 1 plan locked. Awaiting merge approval for Phase 0.**
+
+---
+
+## Phase 0 / Dogfood Cycle Formal Closure (gaebal-gajae, 2026-04-23 11:58 Seoul)
+
+**Authoritative closure statement:**
+
+> **"Phase 0 has finished discovery. Phase 1 should start by landing the locked contract foundation bundle, not by opening new exploratory cycles."**
+
+### Exhaustion Criteria (All Satisfied)
+
+1. ✅ **Unaudited surfaces exhaustion:** 9 surfaces probed (plugins, agents, init, bootstrap-plan, system-prompt, export, sandbox, dump-manifests, skills). No more multi-arg verbs remain unprobed.
+
+2. ✅ **Probe hypothesis validation:** Multi-flag verbs yield 3–4 gaps; single-issue verbs yield 0–1 gaps. Structural pattern confirmed across all 9 probes.
+
+3. ✅ **Phase 1 documentation:** PHASE_1_KICKOFF.md (192 lines) + CYCLE_104-105_REVIEW_GUIDE.md (204 lines) + reviewer-blessed priority queue (6 bundles).
+
+4. ✅ **Branch hygiene:** 39 commits, 564 tests pass, 0 regressions, freeze held (doc-only additions).
+
+### What Closure Means
+
+**No more new pinpoint filings** on `feat/jobdori-168c-emission-routing`. The branch is now **merge-gated only**.
+
+**No more probe cycles** on the frozen branch. The next work unit is **execution**, not discovery.
+
+**Continued work happens on Phase 1 branches** — but those require Phase 0 to merge first.
+
+### Doctrine #29 (Final)
+
+**"Discovery termination is itself a deliverable."**
+
+**Criteria for declaring discovery closed:**
+1. All surfaces probed to a defined taxonomy
+2. Probe hypothesis validated (pattern identified)
+3. Execution plan documented
+4. Branch in reviewer-ready state
+
+**Anti-pattern:** Infinite probe continuation ("there's always more to find")
+**Correct pattern:** Explicit closure statement; pivot to execution
+
+**Validation:** Cycle #109 gaebal-gajae closure. All four criteria met. Discovery formally closed.
+
+### What Happens Next
+
+1. **Short-term (minutes–hours):** Merge approval for Phase 0 branch
+2. **Medium-term (hours):** Phase 1 branch creation in priority order, bundle-by-bundle execution (~10 min per bundle)
+3. **Long-term (days):** Independent fix execution + design decision resolution (#190, #182)
+
+### Metrics Summary
+
+| Metric | Value |
+|---|---|
+| Cycles run | #97 → #109 (13 cycles) |
+| Pinpoints filed | 82 (cycles #97–#108) |
+| Commits on branch | 39 |
+| Tests | 564 pass, 0 fail |
+| Doctrines accumulated | 29 (final: "discovery termination is a deliverable") |
+| Families + sub-lineages | 7 families, 4 sub-lineages, 1 new sub-axis (probe-flow doc-truth) |
+| Reviewer passes | 10+ (gaebal-gajae framing + priority + closure validations) |
+
+---
+
+**END OF PHASE 0 / DOGFOOD CYCLES.**
+
+**Next action: Phase 0 merge approval, then Phase 1 execution sequence.**
+
+🪨
