@@ -9918,3 +9918,60 @@ The fourth verb was misremembered. This is a doc-truthfulness issue: downstream 
 **Doc-truthfulness family membership:** #76, #79, #82, #172.
 
 **Closed:** Yes — shipped in cycle #98, feature branch `feat/jobdori-168c-emission-routing`, commit `ce352f4`.
+
+## Pinpoint #173. Structured output missing actionable hint for `config_load_error` — FILED (cycle #100, 2026-04-23 09:03 Seoul)
+
+**Gap.** When `.claw/settings.json` has a malformed MCP server config (or other config parse error), text mode CLI output shows a helpful "Config load error" card with a typed `Hint:` field:
+
+```
+Config load error
+  Status   fail
+  Summary  runtime config failed to load; reporting partial MCP view
+  Details  /path/.claw/settings.json: mcpServers.bogus-type-server: unsupported MCP server type for bogus-type-server: invalid-type
+  Hint     `claw doctor` classifies config parse errors; fix the listed field and rerun
+```
+
+But JSON mode output for the same scenario has NO hint field — consumers parsing `--output-format json` get only the raw error string:
+
+```json
+{
+  "action": "list",
+  "config_load_error": "/path/.claw/settings.json: mcpServers.bogus-type-server: unsupported MCP server type for bogus-type-server: invalid-type",
+  "configured_servers": 0,
+  "kind": "mcp",
+  "servers": [],
+  "status": "degraded",
+  "working_directory": "/path"
+}
+```
+
+**Reproduction.** Create `.claw/settings.json` with:
+```json
+{"mcpServers": {"bogus": {"type": "invalid-type", "command": "/bin/sh"}}}
+```
+Then run:
+- `claw mcp` → shows Hint
+- `claw --output-format json mcp` → no hint field
+
+**Also affects:** `claw --output-format json status` (same `config_load_error` raw string, no hint). `claw --output-format json doctor` reports `load_error` in config check but no actionable hint typed field.
+
+**Consumer impact.** Claws parsing JSON output for automated recovery / error-routing have no programmatic way to decide "this error needs `claw doctor`" vs. "this error needs manual intervention" vs. "this error is retryable." Text mode humans get this guidance; JSON mode consumers don't.
+
+**Family:** Consumer parity gap. Related to:
+- #247 (hint synthesizer for cli_parse errors — adds "Run `claw --help` for usage.")
+- #169/#170/#171 (classifier kind family — typed error dispatch)
+- #172 (doc-truthfulness for structured output)
+
+**Proposed fix shape (Phase 1 scope candidate):**
+1. Add `hint` field to JSON envelope when `config_load_error` is present across all affected verbs (mcp, status, doctor's config check)
+2. Re-use existing text-mode hint strings (`claw doctor` for parse errors) OR
+3. Add structured `hint_kind` taxonomy: `"run_doctor"`, `"fix_config"`, `"retry"` etc.
+
+**Risk / scope:**
+- Low risk (additive field, no breaking changes)
+- Medium scope (touches 3+ verbs' JSON envelope emission)
+- Requires SCHEMAS.md v1.5 baseline update + regression test
+
+**Status:** FILED only, not fixed. Current branch `feat/jobdori-168c-emission-routing` is under freeze (cycles #98-#99 doctrine: 5 axes complete, review-ready, no axis #6). Fix will land on a separate branch post-review.
+
+**Discovery cycle:** #100 (non-classifier axis pivot continues — event/log opacity probe surfaced a structured-output parity gap).
