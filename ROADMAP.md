@@ -10884,3 +10884,48 @@ Priority 3 (MEDIUM, classifier cleanup):
 Rationale: Minimizes contract-shape changes per cycle. Each consumer update cycle costs them more than each classifier update cycle.
 
 **Validation:** Cycle #104-#105 sequence established via gaebal-gajae review. Total disruption: 1 shape change + 1 classifier change across 3 merges.
+
+## Pinpoint #187. `claw export` unknown-option classifier gap — FILED (cycle #106, 2026-04-23 11:22 Seoul)
+
+**Gap.** `claw export --bogus-flag` emits:
+```json
+{"error": "unknown export option: --bogus-flag", "hint": null, "kind": "unknown", "type": "error"}
+```
+
+**Should emit (per `claw sandbox --bogus-flag` reference):**
+```json
+{"error": "unknown export option: --bogus-flag", "hint": "Run `claw export --help` for usage.", "kind": "cli_parse", "type": "error"}
+```
+
+**Why this matters:**
+- Error message is clear ("unknown export option")
+- But classifier = `unknown` instead of `cli_parse`
+- Missing hint (should suggest `--help`)
+- Inconsistent with `sandbox` verb which correctly classifies unknown flags as `cli_parse`
+
+**Pattern:** Direct sibling of #186 (system-prompt classifier gap).
+
+**Fix shape:**
+```rust
+} else if message.contains("unknown") && message.contains("export option:") {
+    "cli_parse"  // and add hint = "Run `claw export --help` for usage."
+}
+```
+
+**Family:** Typed-error classifier (#169/#170 lineage). Unknown-option sub-lineage now at 2 members (#186 system-prompt, #187 export).
+
+**Comparison:** `sandbox --bogus-flag` already does this correctly. `export` is the outlier.
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+## Cycle #106 Summary
+
+**Probe focus:** `claw export` and `claw sandbox` verbs (unaudited per cycle #104 hypothesis).
+
+**Hypothesis test:** Unaudited surfaces yield 2-3 pinpoints. Cycle #106 result: 1 pinpoint so far (export classifier gap #187), with export otherwise healthy (session_not_found and filesystem_io_error are correctly classified).
+
+**Observation:** `sandbox` is a simpler verb (no args, just status output) and has NO classifier gaps. `export` has one classifier gap but otherwise well-classified. Suggests classifier coverage is improving on newer verbs.
+
+**Pinpoint count:** 77 filed (+1 from #187), 63 genuinely open.
+
+**Branch:** `feat/jobdori-168c-emission-routing` @ 32 commits (unchanged, freeze held).
