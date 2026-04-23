@@ -10076,3 +10076,85 @@ This naming follows the established `feat/jobdori-<number>-<brief>` convention a
 5. Single-commit PR, easy review
 
 **Family alignment:** Part of typed-error classifier family (#121, #127, #129, #130, #164, #169, #170, #171, #174, #247). Future sweep might batch all remaining `unknown` classifications into a single pass.
+
+## Pinpoint #175. `skills install` filesystem errors classified as `unknown` instead of `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
+
+**Gap.** `claw --output-format json skills install <path>` returns `kind: "unknown"` for filesystem errors, violating the SCHEMAS.md v1.5 error kind enum which explicitly includes `"filesystem"` as a valid kind.
+
+**Reproduction.**
+```bash
+# Probe A: Nonexistent path
+claw --output-format json skills install /nonexistent/path
+# → {"error": "No such file or directory (os error 2)", "hint": null, "kind": "unknown", "type": "error"}
+
+# Probe B: Directory without SKILL.md
+claw --output-format json skills install .
+# → {"error": "skill directory '<path>' must contain SKILL.md", "hint": null, "kind": "unknown", "type": "error"}
+```
+
+**Expected (per SCHEMAS.md v2.0 schema proposal, which uses this as EXAMPLE):**
+```json
+{
+  "kind": "filesystem",
+  "operation": "open",
+  "target": "/nonexistent/path",
+  "message": "No such file or directory"
+}
+```
+
+**Current `skills install` emits `kind: "unknown"` which is ambiguous and doesn't match the schema enum** (which lists `filesystem`, `auth`, `session`, `parse`, `runtime`, `mcp`, `delivery`, `usage`, `policy`, `unknown`).
+
+**Pattern:** This is a classifier gap analogous to #169/#170/#171 but for **filesystem error messages**, not CLI parse errors.
+
+**Fix shape.** Add classifier branches in `classify_error_kind`:
+```rust
+} else if message.contains("(os error 2)") ||
+          message.contains("No such file or directory") {
+    "filesystem"
+} else if message.contains("must contain SKILL.md") {
+    "parse"  // or new kind "validation" if needed
+}
+```
+
+**Family:** Typed-error classifier family. Related: #169-#174 (classifier gaps), #172 (doc-truthfulness).
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c. Proposed separate branch: `feat/jobdori-175-filesystem-error-classifier`.
+
+## Pinpoint #176. `export` emits `kind: "filesystem_io_error"` but enum lists only `filesystem` — FILED (cycle #102, 2026-04-23 10:02 Seoul)
+
+**Gap.** Inconsistent naming in error kind enum:
+
+```bash
+claw --output-format json export /nonexistent/dir/file.json
+# → {"error": "...", "kind": "filesystem_io_error", "type": "error"}
+```
+
+But SCHEMAS.md v1.5 baseline enum lists:
+```
+One of: filesystem, auth, session, parse, runtime, mcp, delivery, usage, policy, unknown
+```
+
+`"filesystem_io_error"` is NOT in this list. Two possibilities:
+1. **`export` should emit `kind: "filesystem"`** (align with enum)
+2. **Enum should include `filesystem_io_error`** (expand the schema)
+
+**Related to #175:** Both touch the filesystem-error-kind axis. Could be batched:
+- #175 fixes `skills install` (unknown → filesystem)
+- #176 fixes `export` (filesystem_io_error → filesystem OR expand enum)
+
+**Fix shape preferred:** Unify under `filesystem` (Option 1). Reasons:
+- Matches SCHEMAS.md v1.5 declared enum
+- Matches the SCHEMAS.md v2.0 example syntax
+- Simpler consumer dispatch
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c. Proposed separate branch: `feat/jobdori-176-export-kind-normalization`. Possibly bundled with #175 as `feat/jobdori-175-filesystem-error-family`.
+
+**Doctrine observation (cycle #102):** Same probe (`export` + `skills install`) surfaced both a classifier gap AND an enum-naming inconsistency. This is evidence that the **filesystem error kind axis** is under-audited — a single broader sweep could catch multiple gaps at once.
+
+## Pinpoint Accounting Update (cycle #102)
+
+**Current state after cycle #102:**
+- **Filed total:** 68 (+2 from #175, #176)
+- **Genuinely open:** 54 (+2 from #175, #176)
+- **Typed-error family:** 12 members (#121, #127, #129, #130, #164, #169, #170, #171, #174, #175, #176, #247)
+- **Filesystem error sub-family emerging:** #175 (missing classifier), #176 (inconsistent naming). Likely others to discover (upload, read, write, etc. paths).
