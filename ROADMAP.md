@@ -11025,3 +11025,91 @@ Rationale: Minimizes contract-shape changes per cycle. Each consumer update cycl
 ├── CI/workflow (1): #175
 └── Consumer-parity (1): #173
 ```
+
+## Pinpoint #188. `claw dump-manifests --help` omits prerequisite info (doc-truthfulness gap) — FILED (cycle #107, 2026-04-23 11:32 Seoul)
+
+**Gap.** Help text and actual behavior diverge:
+
+**Help text output:**
+```
+Dump Manifests
+  Usage            claw dump-manifests [--manifests-dir <path>] [--output-format <format>]
+  Purpose          emit every skill/agent/tool manifest the resolver would load for the current cwd
+  Options          --manifests-dir scopes discovery to a specific directory
+  Formats          text (default), json
+  Related          claw skills · claw agents · claw doctor
+```
+
+**Actual behavior (no args, no env var):**
+```json
+{"error": "Manifest source files are missing.",
+ "hint": "repo root: ...\n  missing: src/commands.ts, src/tools.ts, src/entrypoints/cli.tsx\n  Hint: set CLAUDE_CODE_UPSTREAM=/path/to/upstream or pass `claw dump-manifests --manifests-dir /path/to/upstream`.",
+ "kind": "missing_manifests", "type": "error"}
+```
+
+**Help text says:** Usage is `[--manifests-dir <path>]` (optional flag)
+**Reality:** Works only with `--manifests-dir` OR `CLAUDE_CODE_UPSTREAM` env var. Neither is optional.
+
+**USAGE.md is correct** (line 1: "This command requires access to upstream source files...") but **the CLI `--help` output lies by omission**. Users running `claw dump-manifests --help` get misleading usage info.
+
+**Impact:**
+- Users who skip reading USAGE.md and rely on `--help` get confused by the missing_manifests error
+- The fact that `CLAUDE_CODE_UPSTREAM` env var works is not discoverable from `--help` alone
+- Doc-truthfulness gap: help text ≠ actual behavior
+
+**Fix shape:**
+```
+Dump Manifests
+  Usage            claw dump-manifests (--manifests-dir <path> | env CLAUDE_CODE_UPSTREAM=<path>)
+  Purpose          emit every skill/agent/tool manifest (parity tool for the TypeScript port)
+  Prerequisite     upstream source files (src/commands.ts, src/tools.ts, src/entrypoints/cli.tsx)
+  Environment      CLAUDE_CODE_UPSTREAM overrides --manifests-dir when set
+  Formats          text (default), json
+  Related          claw skills · claw agents · claw doctor
+```
+
+**Framing (reviewer-ready):**
+> "`claw dump-manifests --help` describes usage as optional flags, but the verb fails without one of `--manifests-dir` or `CLAUDE_CODE_UPSTREAM`. Help text should reflect the actual prerequisite."
+
+**Family:** Doc-truthfulness (#76, #79, #82, #172, #180) — 6 members now.
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+## Pinpoint #189. `claw dump-manifests --bogus-flag` classifier gap — FILED (cycle #107, 2026-04-23 11:32 Seoul)
+
+**Gap.** Same pattern as #186 (system-prompt) and #187 (export):
+
+```bash
+claw dump-manifests --bogus-flag
+# Current:  {"error": "unknown dump-manifests option: --bogus-flag", "kind": "unknown", "hint": null}
+# Expected: {"error": ..., "kind": "cli_parse", "hint": "Run `claw dump-manifests --help` for usage."}
+```
+
+**Framing (reviewer-ready):**
+> "`dump-manifests` unknown-option errors still fall through to `unknown`, unlike the already-canonical `sandbox` CLI-parse path."
+
+**Family:** Typed-error classifier, unknown-option sub-lineage (#169/#170 lineage). Now at 3 members: #186, #187, #189.
+
+**Bundle:** Add to `feat/jobdori-186-187-classifier-sweep` or rename as `feat/jobdori-186-189-classifier-sweep` since the same pattern now covers 3 verbs.
+
+**Status:** FILED. Per freeze doctrine, no fix on 168c.
+
+## Cycle #107 Summary
+
+**Probe focus:** `claw dump-manifests` (unaudited per cycle #104).
+
+**Hypothesis confirmed:** Multi-flag/complex verbs have classifier holes + doc gaps. Single-issue verbs (like `sandbox`) tend to be clean.
+
+**Yield:** 2 pinpoints from one verb probe:
+- #188: doc-truthfulness (help text vs reality)
+- #189: classifier (same as #186/#187)
+
+**Cross-family finding:** #188 is the **first doc-truthfulness pinpoint from the probe flow**. Previous doc-truth gaps (#76, #79, #82, #172, #180) were all audits against SCHEMAS.md, USAGE.md, or README. #188 is a NEW axis: **help text vs behavior**.
+
+**Updated bundle for classifier sweep:**
+- `feat/jobdori-186-189-classifier-sweep` (#186 + #187 + #189)
+- Three verbs, same pattern, one PR
+
+**Pinpoint count:** 79 filed (+2 from #188-#189), 65 genuinely open.
+
+**Branch:** `feat/jobdori-168c-emission-routing` @ 35 commits (unchanged code, freeze held).
