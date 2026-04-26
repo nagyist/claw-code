@@ -17415,3 +17415,29 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 **Status:** Open. No source code changed. Filed 2026-04-26 22:00 KST. Branch: feat/jobdori-168c-emission-routing. HEAD: `bfd5f2b` before filing. Live evidence: gaebal-gajae 6× `500 empty_stream` in ~50 min sustained, 2026-04-26 KST evening. Cluster delta: new cluster (repeat-failure-detection / circuit-breaker). Concrete delta this cycle: ROADMAP.md appended with #291; pushed to both remotes.
 
 **Branch / parity:** local==origin==fork at `96388c8`
+
+### #292 — Extreme sustained upstream degradation lacks user-facing escalation guidance
+
+**Exact pinpoint:** When upstream provider failures sustain for >1 hour (10+ consecutive failures), claw-code does NOT escalate to the user with structured advice. No mention of: provider status page URL, expected SLA recovery time, recommended fallback provider, escalation contact (e.g., open support ticket). User experiences identical bare-string error message on attempt #1, #5, and #15 — no signal that this is now an EXTREME degradation requiring different action.
+
+**Live evidence:**
+- gaebal-gajae's session hit `500 empty_stream: upstream stream closed before first payload` 13+ times across 4+ hours on 2026-04-26 KST evening / Mon early morning (21:04, 21:12, 21:22, 21:33, 21:37, 21:59, 22:03, 22:35, 23:04, 23:33, 00:03, 00:34, 00:37 KST)
+- Same provider, same endpoint, no escalation, no advice change between attempt #1 and attempt #13
+- claw-code surfaced identical error each time
+
+**Why distinct:**
+- #291 (repeat-failure detection / circuit-breaker) — covers MECHANICAL response to repeat failures (block retries, switch provider, etc.), NOT user-facing communication
+- #266 (typed-error-kind taxonomy) — covers single-failure typing, NOT degradation-window aggregation
+- #290 (typed stream-init envelope) — covers single stream-init failure typing, NOT extreme-sustained signaling
+
+**Concrete delta landed:** ROADMAP.md appended with #292; pushed to both remotes.
+
+**Fix shape recorded:**
+- escalation-tier classification (e.g., `degradation_tier=normal|elevated|extreme`)
+- provider-specific status page URLs in failure envelope (e.g., `provider_status_url=https://status.anthropic.com`)
+- recovery time estimates from provider (e.g., `expected_recovery_window=15m|1h|6h+`)
+- escalation guidance text in CLI output for tier=extreme (e.g., "This appears to be a sustained upstream issue. Check provider status, consider fallback, or open support ticket")
+- automated escalation suggestions (e.g., "switch to fallback provider X" if configured per #285)
+- regression tests for tier escalation transitions
+
+**Branch / parity:** local==origin==fork at 7a022b6
