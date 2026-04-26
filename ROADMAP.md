@@ -17542,3 +17542,21 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Un-skip `delete-session`/`load-session`/`flush-transcript` with proper tmp_path fixtures
 - Rust CI: add `-- --test-threads=1 --nocapture` flag for brittleness detection under dogfood concurrency
 - Add `pytest-repeat` run in CI (`--count=3`) to surface non-deterministic failures early
+
+---
+
+## Post-Merge Parity Matrix: claw-code vs. anomalyco/opencode
+
+| Feature | claw-code Status | anomalyco/opencode | claw-code Gap |
+|---------|------------------|-------------------|---------------|
+| `claw lanes` (session enumeration) | Stub (#30) | Live (full state) | #30: Implement live enumeration |
+| `claw branches --status` (divergence) | Unimplemented (#32) | Live (parity display) | #32: Add status output |
+| `claw sync` (worktree freshness) | Unimplemented (#295) | Live (auto-sync) | #295: Add sync flow |
+| `claw setup` (first-run wizard) | Unimplemented (#294) | Live (interactive) | #294: Add guided onboarding |
+| `claw doctor --providers` (health check) | Unimplemented (#293) | Live (provider ping) | #293: Add provider diagnostics |
+| Multi-provider routing (declarative) | Design phase (#245/#246/#285) | Live (full impl) | Phase A: Implement declarative config |
+| Auto-compaction (context-aware) | Design phase (#287/#288/#289) | Live (tuned algorithm) | Phase B: Implement compaction |
+| Streaming error envelope | Design phase (#290/#291/#292) | Live (all edge cases) | Phase B: Implement resilience |
+| Tool-result atomic writes | Design phase (#254/#268/#274) | Live (MCP refresh) | Phase C: Implement tool lifecycle |
+| Session persistence versioning | Design phase (#278/#279) | Live (migrations) | Phase D: Implement persistence |
+| CLI `--max-turns` / `--cwd` | Design phase (#262/#267/#272) | Live (flexible dispatch) | Phase E: Implement dispatch |
