@@ -17492,3 +17492,26 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Minimal setup path: detect provider intent from model flag (e.g., `claw --model claude-*` → prompt for `ANTHROPIC_API_KEY`)
 - `claw doctor --setup` mode: not just validation but guided remediation
 - Acceptance: `claw` with no config shows actionable setup guidance, not an opaque auth error
+
+### #295 — Long-running worktree has no stale-branch detection or auto-sync warning
+
+**Exact pinpoint:** When working in a long-running claw-code worktree (e.g., during a multi-hour dogfood session), there is no mechanism to detect or warn when the local branch is behind origin. Each new subagent cycle must manually run `git fetch && git pull --rebase` to avoid working on stale code. claw-code has no `claw sync`, no stale-worktree indicator in `claw branches`, no `claw status` that shows upstream divergence, and no pre-session freshness check.
+
+**Live evidence:**
+- Extended dogfood audit (cycles #410-#438, 13+ hours) required manual `git pull --rebase` at the start of every subagent cycle
+- Without this step, subagents risk operating on stale HEAD, introducing rebase conflicts on push
+- Q's 06:32 status: "claw-code worktrees present: `providers`, `batchtool`" — both invisible to `claw lanes` (#30) and neither has staleness detection
+
+**Why distinct:**
+- #30 (`claw lanes` stub) — covers session enumeration, NOT branch freshness
+- #32 (`claw branches --status`) — covers branch status display, NOT auto-sync or staleness warning
+- #38 (`claw new` worktrees invisible) — covers worktree discovery, NOT upstream sync
+
+**Concrete delta landed:** ROADMAP.md appended with #295.
+
+**Fix shape recorded:**
+- `claw sync` command: fetch + rebase current branch against origin (single command)
+- Pre-session freshness check: `claw` warns if local branch is >N commits behind origin
+- `claw status` includes upstream divergence count (like `git status` shows `Your branch is behind by N commits`)
+- `claw doctor` checks: worktree staleness as part of health check
+- Integration with #38: marker file could include last-sync timestamp
