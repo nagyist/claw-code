@@ -17792,3 +17792,27 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 **Source:** Dogfood cycle #447 (2026-04-27 10:31 KST) — discovered via grep trace of `rust/crates/runtime/src/compact.rs` + `mock-anthropic-service` (HEAD d01ebd3), branch `feat/jobdori-168c-emission-routing`
 
 **Note:** This entry was initially filed with number #302 (collision with the `status JSON usage` pinpoint above). Renumbered to #305 at 2026-04-27 10:59 KST merge sync (dogfood #448).
+
+---
+
+### #306 — `claw --version` lacks build metadata (git hash, build date, target triple)
+
+**Exact pinpoint:** Running `claw --version` returns only a semver string (e.g., `claw 0.1.0`). It does not include: (1) git commit hash (short SHA), (2) build date/timestamp, (3) Rust target triple (e.g., `aarch64-apple-darwin`), (4) profile (debug vs. release). Standard CLI tooling practice (see: `rustc --version --verbose`, `cargo --version`, `git --version`) is to include build metadata so operators can precisely correlate bug reports to exact builds. During extended dogfood sessions, multiple builds accumulate; without build metadata, there is no reliable way to know which binary is running.
+
+**Live evidence:**
+- Extended dogfood audit (15+ hours, 48 subagent cycles) used multiple builds across rebases — no way to verify exact binary version mid-session
+- Clawhip nudge prompt lists "startup friction" as a priority category — version opacity is first-contact friction for bug reporters
+- No `vergen`, `build_info`, or `env!("CARGO_PKG_VERSION")` + git hash combo found in build.rs or main.rs
+
+**Why distinct:**
+- #294 (first-run onboarding wizard) — covers setup flow, NOT binary identification
+- #301 (no pre-built binary distribution) — covers install friction, NOT version reporting
+- #298 (event/log opacity) — covers runtime log structure, NOT CLI version metadata
+
+**Concrete delta landed:** ROADMAP.md appended with #306.
+
+**Fix shape recorded:**
+- `build.rs`: use `vergen` crate to embed `VERGEN_GIT_SHA`, `VERGEN_BUILD_DATE`, `VERGEN_CARGO_TARGET_TRIPLE` at compile time
+- `claw --version` output: `claw 0.1.0 (abc1234 2026-04-27 aarch64-apple-darwin release)`
+- `claw --version --verbose`: full build metadata block
+- Acceptance: `claw --version | grep -E '[0-9a-f]{7}'` passes
