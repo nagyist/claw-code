@@ -17841,3 +17841,27 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - USAGE.md: add "Shell Completion" section with install instructions per shell
 - Homebrew formula: include completion install step
 - Acceptance: `claw completions zsh > ~/.zsh/completions/_claw && exec zsh` gives tab completion
+
+### #308 — Exit codes are not semantically distinct across failure categories
+
+**Exact pinpoint:** When `claw` exits with a non-zero status, the exit code carries no semantic information about failure category. All failures (bad config, auth error, provider unavailable, timeout, user cancellation via Ctrl-C, tool execution error) likely collapse to exit code `1`. CI/automation pipelines that call `claw` in scripts cannot distinguish "provider is down, retry" from "config is wrong, abort" from "user cancelled, continue" using exit codes alone. No exit code schema is documented in USAGE.md, CONFIGURATION.md, or API_REFERENCE.md.
+
+**Live evidence:**
+- Extended dogfood audit (16+ hours, 51 subagent cycles) ran `claw` in automated scripts — all failures produced `exit(1)` with no category signal
+- gaebal-gajae's 20+ `500 empty_stream` failures produced no distinct exit code distinguishing upstream degradation from config errors
+- No `ExitCode` enum or structured exit code documentation found in source
+- `exit(2)` only appears for `resume` subcommand parse failures (lines 3049–3120 of `main.rs`), NOT for auth/provider/timeout errors — those all collapse to `exit(1)`
+
+**Why distinct:**
+- #298 (event/log opacity) — covers structured log format, NOT exit code semantics
+- #290 (stream-init error envelope) — covers API response envelope, NOT process exit codes
+- #292 (extreme-sustained-degradation escalation) — covers runtime UX, NOT exit codes
+
+**Concrete delta landed:** ROADMAP.md appended with #308.
+
+**Fix shape recorded:**
+- Define exit code schema (e.g., 0=success, 1=generic error, 2=config error, 3=auth error, 4=provider unavailable, 5=timeout, 130=user cancelled Ctrl-C)
+- Document schema in USAGE.md and API_REFERENCE.md
+- Implement: map error variants to exit codes in `main.rs`
+- Acceptance: `claw run ... ; echo $?` returns distinct codes per failure category
+- CI integration: `if [ $? -eq 4 ]; then retry; fi` pattern becomes viable
