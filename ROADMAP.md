@@ -17605,3 +17605,24 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - `--log-format json` flag → emit NDJSON to stderr or `--log-file`
 - Session discriminator: `session_id` field in each log line
 - `claw logs` subcommand: tail/filter session logs (long-term)
+
+### #299 — `/resume latest` session search is scoped to current workspace only
+
+**Exact pinpoint:** The `/resume latest` command searches for the most recent session only within the current working directory/workspace. If a user switches directories or starts claw-code from a different workspace, `/resume latest` cannot find sessions from other workspaces even though those sessions are stored and theoretically accessible. This creates a surprising UX gap: users who move between projects cannot resume recent sessions without knowing the exact session ID.
+
+**Live evidence:**
+- PR ultraworkers/claw-code#2811 opened 2026-04-27 09:36 KST: "fix: /resume latest searches all workspaces" — independent upstream fix confirming this as a real bug
+- Extended dogfood audit (14+ hours) involved frequent workspace switches (worktree: providers, batchtool, main) — `/resume` behavior across workspaces was a source of friction
+
+**Why distinct:**
+- #30 (`claw lanes` stub) — session enumeration in lane board, NOT resume-scope search
+- #278/#279 (session persistence versioning) — session format/migration, NOT search scope
+- #295 (stale-branch detection) — worktree hygiene, NOT session discovery across workspaces
+
+**Concrete delta landed:** ROADMAP.md appended with #299; PR #2811 cross-referenced as upstream fix.
+
+**Fix shape recorded:**
+- `/resume latest` should search all known workspaces (not just cwd)
+- Session store lookup: scan all workspace-scoped stores, return globally most-recent
+- `--workspace <path>` flag: opt-in to workspace-scoped search (restore original behavior)
+- Upstream: track PR #2811 merge status; port fix if claw-code diverges
