@@ -17959,3 +17959,19 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - `/status` command: include `Context: 142k/200k (71%)` field
 - Acceptance: user can observe context growth; prompted to compact before error
 - Cross-ref: #305 (/compact dry-run), auto-compaction cluster (#283-#289)
+
+### #313 — `/status` slash command missing or returning minimal session information
+
+**Exact pinpoint:** Running `/status` in a claw session should return a comprehensive snapshot: (1) current session ID, (2) context window usage (tokens used / limit), (3) active provider + model, (4) MCP servers connected/degraded, (5) active tool permissions, (6) session duration. Without this, users have no in-session observability without exiting and running `claw doctor`.
+
+**Live evidence:**
+- 16+ hour audit (63 pinpoints): session health had to be inferred from external logs; no `/status` verified to return full snapshot
+- #312 (context window saturation): proposed `/status` show `Context: 142k/200k (71%)` — implies `/status` not yet comprehensive
+- gaebal-gajae's #247: MCP degraded state not surfaced to user — `/status` would expose this
+
+**Why distinct:**
+- #293 (claw doctor) — covers pre-session health check, NOT in-session `/status`
+- #312 (context saturation warning) — covers threshold alerts, NOT full status dump
+- #298 (log opacity) — covers structured log FORMAT, NOT interactive `/status`
+
+**Concrete delta landed:** ROADMAP.md appended with #313.
