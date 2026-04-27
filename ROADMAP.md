@@ -17816,3 +17816,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - `claw --version` output: `claw 0.1.0 (abc1234 2026-04-27 aarch64-apple-darwin release)`
 - `claw --version --verbose`: full build metadata block
 - Acceptance: `claw --version | grep -E '[0-9a-f]{7}'` passes
+
+### #307 — No shell completion scripts for bash/zsh/fish/PowerShell
+
+**Exact pinpoint:** `claw` provides multiple subcommands (`run`, `status`, `branches`, `lanes`, `doctor`, `compact`, `resume`, `new`, `sync`) and many flags (`--output-format`, `--provider`, `--model`, `--max-turns`, `--cwd`, etc.), but ships no shell completion scripts. Users must type full command names and flags from memory or with `--help` reference. No `claw completions bash|zsh|fish|powershell` subcommand, no generated completion files, no install instructions in USAGE.md or CONTRIBUTING.md.
+
+**Live evidence:**
+- Extended dogfood audit (15+ hours) involved hundreds of `claw` invocations across subcommands — all typed manually without autocomplete
+- `rust/crates/rusty-claude-cli/src/main.rs`: no `clap::Shell`, `clap_complete`, or `generate_to` usage found
+- No `.bash_completion`, `_claw` (zsh), or `claw.fish` files in repo
+- Clawhip nudge prompt lists "startup friction" as priority category
+
+**Why distinct:**
+- #294 (first-run onboarding wizard) — covers guided setup, NOT tab completion
+- #301 (no pre-built binary distribution) — covers install friction, NOT shell integration
+- #306 (`--version` build metadata) — covers binary identification, NOT shell completion
+
+**Concrete delta landed:** ROADMAP.md appended with #307.
+
+**Fix shape recorded:**
+- Add `clap_complete` dependency to `rusty-claude-cli/Cargo.toml`
+- `claw completions <shell>` subcommand: `bash`, `zsh`, `fish`, `powershell`, `elvish`
+- `build.rs` generation: auto-generate completion files to `target/completions/` on build
+- USAGE.md: add "Shell Completion" section with install instructions per shell
+- Homebrew formula: include completion install step
+- Acceptance: `claw completions zsh > ~/.zsh/completions/_claw && exec zsh` gives tab completion
