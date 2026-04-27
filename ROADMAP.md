@@ -17790,3 +17790,5 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 **Blocker:** None
 
 **Source:** Dogfood cycle #447 (2026-04-27 10:31 KST) — discovered via grep trace of `rust/crates/runtime/src/compact.rs` + `mock-anthropic-service` (HEAD d01ebd3), branch `feat/jobdori-168c-emission-routing`
+
+**Note:** This entry was initially filed with number #302 (collision with the `status JSON usage` pinpoint above). Renumbered to #304 at 2026-04-27 10:53 KST status cycle.
