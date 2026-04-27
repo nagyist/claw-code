@@ -17585,3 +17585,23 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - User notification: `[MCP: <server-name> disconnected — retrying (1/3)]` style status message
 - `claw doctor --mcp` checks: validate all configured MCP servers are reachable
 - Integration with #293 (claw doctor provider health): unified health-check command
+
+### #298 — Event/log output is unstructured; no machine-readable or queryable format
+
+**Exact pinpoint:** claw-code emits diagnostic output to stderr in human-readable format but provides no: (1) structured log format (JSON-lines/NDJSON), (2) documented log level filtering, (3) session-scoped log capture (parallel sessions interleave), (4) machine-readable event stream for CI/monitoring, (5) `--log-file` flag. Operators running claw-code in automated pipelines cannot parse events without brittle regex.
+
+**Live evidence:**
+- Extended dogfood audit (14+ hours, 43 subagent cycles) relied on Discord post-hoc summaries rather than queryable session logs
+- Clawhip nudge prompt lists "event/log opacity" as a recurring priority discovery area
+- Parallel subagent sessions produced interleaved stderr with no session discriminator
+
+**Why distinct:**
+- #292 (extreme-sustained-degradation escalation) — runtime user-facing escalation, NOT log structure
+- #290 (stream-init error envelope) — API response envelope, NOT diagnostic logging
+- #283 (skip-reason typing) — compaction event typing, NOT general logging
+
+**Fix shape recorded:**
+- `RUST_LOG` documentation in CONFIGURATION.md (immediate, low-effort)
+- `--log-format json` flag → emit NDJSON to stderr or `--log-file`
+- Session discriminator: `session_id` field in each log line
+- `claw logs` subcommand: tail/filter session logs (long-term)
