@@ -17699,3 +17699,40 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Docker: multi-stage Dockerfile (builder + minimal runtime image)
 - `cargo install`: publish to crates.io as `claw-code` once API stabilizes
 - Quick start in README: one-liner install command at top
+
+### #302 — `usage` block in `claw status --output-format json` always reports zero; no live context-window budget signal
+
+**Exact pinpoint:** `claw --output-format json status` returns a `usage` block with all fields zeroed (`cumulative_input: 0`, `cumulative_output: 0`, `estimated_tokens: 0`, etc.) regardless of session state. There is no way for a downstream tool (CI orchestrator, wrapper script, UI) to programmatically read current token consumption or estimate remaining context budget without starting an actual conversation turn. The sandbox also silently falls back to `filesystem_active: true` with `supported: false` — the JSON carries no machine-readable reason why namespace isolation is unavailable other than the prose `fallback_reason` field.
+
+**Live evidence:**
+- `claw --output-format json status` (HEAD d01ebd3, scratch dir `/tmp/cdR`, 2026-04-27 10:06 KST):
+  ```json
+  "usage": {
+    "cumulative_input": 0,
+    "cumulative_output": 0,
+    "cumulative_total": 0,
+    "estimated_tokens": 0,
+    "latest_total": 0,
+    "messages": 0,
+    "turns": 0
+  }
+  ```
+- Three duplicate deprecation warnings emitted to stderr before JSON (confirms #300 is still live)
+- `sandbox.supported: false` + `sandbox.filesystem_active: true` — contradictory state with no structured error code
+
+**Why distinct:**
+- #298 (unstructured event/log output) — covers log stream, NOT the status JSON schema
+- #293 (claw doctor health check) — covers diagnostic subcommand, NOT status JSON fields
+- #300 (deprecated config key / no migration) — same session, separate gap (config lifecycle vs. status reporting)
+
+**Concrete delta landed:** ROADMAP.md appended with #302.
+
+**Fix shape recorded:**
+- `usage` fields: populate from session store on disk (last known values) even when no active REPL session; emit `"session_active": false` flag to signal cold-read vs. live
+- Add `context_limit` field: model's max context window (from model registry) — enables budget math externally
+- Sandbox status: replace prose `fallback_reason` with structured `fallback_code` enum (`namespace_unavailable`, `non_linux`, `insufficient_caps`, etc.)
+- Acceptance: `claw status --output-format json | jq .usage.context_limit` returns non-zero on any platform; sandbox state has machine-readable `fallback_code`
+
+**Blocker:** None
+
+**Source:** Dogfood cycle #436 (2026-04-27 10:06 KST) — discovered via live `claw --output-format json status` from scratch dir `/tmp/cdR`, HEAD d01ebd3
