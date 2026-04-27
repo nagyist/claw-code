@@ -17761,3 +17761,32 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 **Blocker:** None
 
 **Source:** Dogfood cycle #437 (2026-04-27 10:16 KST) — discovered via static trace of `rust/crates/runtime/src/session.rs` (HEAD 4423774), scratch dir `/tmp/cdS`
+
+---
+
+### #302 — `/compact` has no dry-run or preview mode before irreversible compaction
+
+**Exact pinpoint:** When a user runs `/compact`, the operation executes immediately with no preview of: (1) which messages/turns will be removed, (2) how much context will be freed, (3) what summary will replace the removed turns, (4) estimated new token count post-compaction. Compaction is effectively irreversible within a session — there is no `/compact --dry-run` or `/compact --preview` that shows the plan before committing. Users discover the compaction result only after it has already modified session state.
+
+**Live evidence:**
+- Extended dogfood audit (14+ hours) ran auto-compaction on long sessions with no ability to inspect the compaction plan
+- Q's pinpoint #303 (silent log rotation) exposes adjacent risk: session content can be irreversibly lost without user awareness
+- No `dry_run`, `preview`, or `plan` flag found in compact-related source
+
+**Why distinct:**
+- #283 (skip-reason typing) — covers why compaction was skipped, NOT preview before execution
+- #287 (auto-compaction chunk-aware budgeting) — covers algorithm accuracy, NOT user preview
+- #288 (auto-compaction preflight check) — covers pre-session check, NOT interactive preview
+- Q's #303 (silent log rotation) — covers log file deletion, NOT in-session compaction preview
+
+**Concrete delta landed:** ROADMAP.md appended with #302.
+
+**Fix shape recorded:**
+- `/compact --dry-run`: show compaction plan (turns to remove, context freed, summary preview) without executing
+- `/compact --preview`: interactive confirmation ("Remove 15 turns, free 4,200 tokens? [y/N]")
+- Compaction summary displayed post-execution: "Compacted 15 turns → 1 summary block. Context: 45k → 28k tokens"
+- Undo window: brief window to `/compact --undo` before session state is fully committed
+
+**Blocker:** None
+
+**Source:** Dogfood cycle #447 (2026-04-27 10:31 KST) — discovered via grep trace of `rust/crates/runtime/src/compact.rs` + `mock-anthropic-service` (HEAD d01ebd3), branch `feat/jobdori-168c-emission-routing`
