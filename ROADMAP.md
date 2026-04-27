@@ -17736,3 +17736,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 **Blocker:** None
 
 **Source:** Dogfood cycle #436 (2026-04-27 10:06 KST) — discovered via live `claw --output-format json status` from scratch dir `/tmp/cdR`, HEAD d01ebd3
+
+### #303 — Session rotation silently deletes oldest rotated log when MAX_ROTATED_FILES (3) is exceeded; `--resume` loses conversation history without warning
+
+**Exact pinpoint:** `session.rs` defines `MAX_ROTATED_FILES = 3` and `ROTATE_AFTER_BYTES = 256 KiB`. After every `append_to_file` call, `rotate_session_file_if_needed` renames the active file to `{stem}.rot-{timestamp_ms}.jsonl` when it exceeds 256 KiB, then `cleanup_rotated_logs` calls `fs::remove_file` on the oldest rotated file(s) to keep at most 3 rotated files. No diagnostic, warning, event, or UI signal is emitted before or after the deletion. A long session that exceeds `~1 MiB` of JSONL (active + 3 rotated × 256 KiB) has its earliest messages permanently deleted on disk. Because `--resume` replays conversation from on-disk JSONL, older turns are silently lost from the resumed context.
+
+**Live evidence (static trace — no running binary required):**
+- `rust/crates/runtime/src/session.rs:13-14`: `ROTATE_AFTER_BYTES = 256 * 1024`, `MAX_ROTATED_FILES = 3`
+- `session.rs:1105-1138` (`cleanup_rotated_logs`): sorts rotated paths, computes `remove_count = rotated_paths.len().saturating_sub(MAX_ROTATED_FILES)`, then `fs::remove_file(stale_path)` for each — no log, no event, no metric
+- `session.rs:207,209`: `rotate_session_file_if_needed` + `cleanup_rotated_logs` called on every `append_to_file` invocation — deletion can trigger mid-session
+- No caller in any crate emits a structured event or user-visible warning after `cleanup_rotated_logs` returns
+
+**Why distinct:**
+- #298 (unstructured event/log output) — covers the log stream format, NOT silent data deletion
+- #302 (status JSON usage always zero) — covers usage reporting, NOT session file lifecycle
+- #114 (filed 2026-04-18, post-/clear divergence) — covers phantom session IDs, NOT rotation data loss
+
+**Fix shape recorded:**
+- Emit a structured `session.log_rotated` event from `cleanup_rotated_logs` with `{ deleted_files: N, oldest_deleted_ms: T, session_id }` — consumers (TUI, CLI stderr, telemetry) can react
+- Add `--history-limit` config key (default: 3) exposed in `settings.json` so power users can raise limit before hitting the cap
+- On `--resume`, check if gap between last retained message and first message in current file exceeds a threshold; surface warning: "Session history truncated: N rotation files pruned, oldest available message: <timestamp>"
+- Acceptance: `claw --output-format json status` includes `session.log_files_retained` and `session.log_files_deleted` counters
+
+**Blocker:** None
+
+**Source:** Dogfood cycle #437 (2026-04-27 10:16 KST) — discovered via static trace of `rust/crates/runtime/src/session.rs` (HEAD 4423774), scratch dir `/tmp/cdS`
