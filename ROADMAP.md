@@ -17674,3 +17674,28 @@ Required fix shape: (a) classify `empty_stream` / stream-closed-before-first-pay
 - Tool failure context: propagate error reason to user ("exec failed: command not found" vs. "timeout")
 - Clarification UX: when ambiguous, ask user to specify tool (like shell completions for `/`)
 - Integration with #286 (agent lifecycle): tool routing aware of parallel execution context
+
+### #301 — No pre-built binary distribution or install script for new users/contributors
+
+**Exact pinpoint:** Installing claw-code requires cloning the repository and building from source (`cargo build --release`), which on a 9-crate workspace takes 5-10+ minutes on a cold build. There is no: (1) GitHub Releases page with pre-built binaries for major platforms (macOS arm64/x86_64, Linux x86_64/arm64, Windows), (2) install script (`curl -fsSL | sh` pattern), (3) Homebrew formula (`brew install claw-code`), (4) Docker image (`docker pull ultraworkers/claw-code`), (5) `cargo install claw-code` via crates.io. This is the first and highest-friction step for any new contributor or user.
+
+**Live evidence:**
+- CONTRIBUTING.md (cycle #411) documents `cargo build` as the only build path
+- ARCHITECTURE.md (cycle #426) identifies 9 Rust crates in the workspace — cold build is substantial
+- No GitHub Releases page, no `install.sh`, no `Dockerfile` found in repo root
+- Clawhip nudge prompt lists "startup friction" as a priority discovery category
+
+**Why distinct:**
+- #294 (first-run onboarding wizard) — covers in-app guided setup, NOT binary distribution
+- #293 (claw doctor health check) — covers diagnostic tooling, NOT installation
+- CONTRIBUTING.md — documents build, but cannot solve the cold-build friction itself
+
+**Concrete delta landed:** ROADMAP.md appended with #301.
+
+**Fix shape recorded:**
+- GitHub Actions release workflow: `cargo build --release` on tag push, upload artifacts per platform
+- `install.sh`: detect platform, download correct binary from GitHub Releases, chmod +x, add to PATH
+- Homebrew tap: `brew install ultraworkers/tap/claw-code`
+- Docker: multi-stage Dockerfile (builder + minimal runtime image)
+- `cargo install`: publish to crates.io as `claw-code` once API stabilizes
+- Quick start in README: one-liner install command at top
