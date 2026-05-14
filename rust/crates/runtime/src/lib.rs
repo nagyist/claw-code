@@ -120,8 +120,10 @@ pub use oauth::{
     PkceChallengeMethod, PkceCodePair,
 };
 pub use permissions::{
-    PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
-    PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+    ApprovalDelegationHop, ApprovalScope, ApprovalTokenAudit, ApprovalTokenError,
+    ApprovalTokenGrant, ApprovalTokenLedger, ApprovalTokenStatus, PermissionContext, PermissionMode,
+    PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
+    PermissionPrompter, PermissionRequest,
 };
 pub use plugin_lifecycle::{
     DegradedMode, DiscoveryResult, PluginHealthcheck, PluginLifecycle, PluginLifecycleEvent,

@@ -12,6 +12,150 @@ pub struct ApprovalScope {
     pub action: String,
     pub repository: Option<String>,
     pub branch: Option<String>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalScope {
@@ -36,6 +180,150 @@ impl ApprovalScope {
         self.branch = Some(branch.into());
         self
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Actor/session hop recorded when an approval is delegated or consumed.
@@ -44,6 +332,150 @@ pub struct ApprovalDelegationHop {
     pub actor: String,
     pub session_id: Option<String>,
     pub reason: String,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalDelegationHop {
@@ -61,6 +493,150 @@ impl ApprovalDelegationHop {
         self.session_id = Some(session_id.into());
         self
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Current lifecycle state for a policy-exception approval token.
@@ -71,6 +647,150 @@ pub enum ApprovalTokenStatus {
     Consumed,
     Expired,
     Revoked,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalTokenStatus {
@@ -84,6 +804,150 @@ impl ApprovalTokenStatus {
             Self::Revoked => "approval_revoked",
         }
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Typed policy errors returned when a token cannot authorize a blocked action.
@@ -96,6 +960,150 @@ pub enum ApprovalTokenError {
     ApprovalAlreadyConsumed,
     ScopeMismatch { expected: ApprovalScope, actual: ApprovalScope },
     UnauthorizedDelegate { expected: String, actual: String },
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalTokenError {
@@ -111,6 +1119,150 @@ impl ApprovalTokenError {
             Self::UnauthorizedDelegate { .. } => "approval_unauthorized_delegate",
         }
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Approval grant bound to a policy/action scope, approving owner, and executor.
@@ -125,6 +1277,150 @@ pub struct ApprovalTokenGrant {
     pub max_uses: u32,
     pub uses: u32,
     delegation_chain: Vec<ApprovalDelegationHop>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalTokenGrant {
@@ -186,6 +1482,150 @@ impl ApprovalTokenGrant {
     pub fn delegation_chain(&self) -> &[ApprovalDelegationHop] {
         &self.delegation_chain
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Auditable result of verifying or consuming an approval token.
@@ -200,12 +1640,300 @@ pub struct ApprovalTokenAudit {
     pub delegation_chain: Vec<ApprovalDelegationHop>,
     pub uses: u32,
     pub max_uses: u32,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// In-memory approval-token ledger with one-time-use and replay protection.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ApprovalTokenLedger {
     grants: BTreeMap<String, ApprovalTokenGrant>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl ApprovalTokenLedger {
@@ -334,6 +2062,150 @@ impl ApprovalTokenLedger {
             max_uses: grant.max_uses,
         }
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Permission level assigned to a tool invocation or runtime session.
@@ -344,6 +2216,150 @@ pub enum PermissionMode {
     DangerFullAccess,
     Prompt,
     Allow,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl PermissionMode {
@@ -357,6 +2373,150 @@ impl PermissionMode {
             Self::Allow => "allow",
         }
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Hook-provided override applied before standard permission evaluation.
@@ -365,6 +2525,150 @@ pub enum PermissionOverride {
     Allow,
     Deny,
     Ask,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Additional permission context supplied by hooks or higher-level orchestration.
@@ -372,6 +2676,150 @@ pub enum PermissionOverride {
 pub struct PermissionContext {
     override_decision: Option<PermissionOverride>,
     override_reason: Option<String>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl PermissionContext {
@@ -395,6 +2843,150 @@ impl PermissionContext {
     pub fn override_reason(&self) -> Option<&str> {
         self.override_reason.as_deref()
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Full authorization request presented to a permission prompt.
@@ -405,6 +2997,150 @@ pub struct PermissionRequest {
     pub current_mode: PermissionMode,
     pub required_mode: PermissionMode,
     pub reason: Option<String>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// User-facing decision returned by a [`PermissionPrompter`].
@@ -412,11 +3148,299 @@ pub struct PermissionRequest {
 pub enum PermissionPromptDecision {
     Allow,
     Deny { reason: String },
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Prompting interface used when policy requires interactive approval.
 pub trait PermissionPrompter {
     fn decide(&mut self, request: &PermissionRequest) -> PermissionPromptDecision;
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Final authorization result after evaluating static rules and prompts.
@@ -424,6 +3448,150 @@ pub trait PermissionPrompter {
 pub enum PermissionOutcome {
     Allow,
     Deny { reason: String },
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 /// Evaluates permission mode requirements plus allow/deny/ask rules.
@@ -434,6 +3602,150 @@ pub struct PermissionPolicy {
     allow_rules: Vec<PermissionRule>,
     deny_rules: Vec<PermissionRule>,
     ask_rules: Vec<PermissionRule>,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl PermissionPolicy {
@@ -662,6 +3974,150 @@ impl PermissionPolicy {
     ) -> Option<&'a PermissionRule> {
         rules.iter().find(|rule| rule.matches(tool_name, input))
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -669,6 +4125,150 @@ struct PermissionRule {
     raw: String,
     tool_name: String,
     matcher: PermissionRuleMatcher,
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -676,6 +4276,150 @@ enum PermissionRuleMatcher {
     Any,
     Exact(String),
     Prefix(String),
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 impl PermissionRule {
@@ -720,6 +4464,150 @@ impl PermissionRule {
                 .is_some_and(|candidate| candidate.starts_with(prefix)),
         }
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
@@ -731,6 +4619,150 @@ fn parse_rule_matcher(content: &str) -> PermissionRuleMatcher {
     } else {
         PermissionRuleMatcher::Exact(unescaped)
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 fn unescape_rule_content(content: &str) -> String {
@@ -738,6 +4770,150 @@ fn unescape_rule_content(content: &str) -> String {
         .replace(r"\(", "(")
         .replace(r"\)", ")")
         .replace(r"\\", r"\")
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 fn find_first_unescaped(value: &str, needle: char) -> Option<usize> {
@@ -753,6 +4929,150 @@ fn find_first_unescaped(value: &str, needle: char) -> Option<usize> {
         escaped = false;
     }
     None
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 fn find_last_unescaped(value: &str, needle: char) -> Option<usize> {
@@ -774,6 +5094,150 @@ fn find_last_unescaped(value: &str, needle: char) -> Option<usize> {
         }
     }
     None
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 fn extract_permission_subject(input: &str) -> Option<String> {
@@ -798,13 +5262,159 @@ fn extract_permission_subject(input: &str) -> Option<String> {
     }
 
     (!input.trim().is_empty()).then(|| input.to_string())
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        PermissionContext, PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
-        PermissionPromptDecision, PermissionPrompter, PermissionRequest,
+        ApprovalDelegationHop, ApprovalScope, ApprovalTokenError, ApprovalTokenGrant,
+        ApprovalTokenLedger, ApprovalTokenStatus, PermissionContext, PermissionMode,
+        PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
+        PermissionPrompter, PermissionRequest,
     };
     use crate::config::RuntimePermissionRuleConfig;
 
@@ -1012,4 +5622,148 @@ mod tests {
             Some("hook requested confirmation")
         );
     }
+
+    #[test]
+    fn approval_token_blocks_until_owner_grants_policy_exception() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        ledger.insert(ApprovalTokenGrant::pending(
+            "tok-pending",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+
+        assert!(matches!(
+            ledger.verify("tok-missing", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::NoApproval)
+        ));
+        assert!(matches!(
+            ledger.verify("tok-pending", &scope, "release-bot", 10),
+            Err(ApprovalTokenError::ApprovalPending)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-granted",
+            scope.clone(),
+            "repo-owner",
+            "release-bot",
+        ));
+        let audit = ledger
+            .verify("tok-granted", &scope, "release-bot", 10)
+            .expect("owner approval should verify");
+
+        assert_eq!(audit.status, ApprovalTokenStatus::Granted);
+        assert_eq!(audit.approving_actor, "repo-owner");
+        assert_eq!(audit.executing_actor, "release-bot");
+        assert!(audit.delegated_execution);
+    }
+
+    #[test]
+    fn approval_token_is_one_time_use_and_rejects_replay() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("release_requires_owner", "release publish")
+            .with_repository("sisyphus/claw-code");
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-once",
+            scope.clone(),
+            "owner",
+            "release-bot",
+        ));
+
+        let first = ledger
+            .consume("tok-once", &scope, "release-bot", 10)
+            .expect("first use should consume token");
+        assert_eq!(first.status, ApprovalTokenStatus::Consumed);
+        assert_eq!(first.uses, 1);
+
+        assert!(matches!(
+            ledger.consume("tok-once", &scope, "release-bot", 11),
+            Err(ApprovalTokenError::ApprovalAlreadyConsumed)
+        ));
+        assert_eq!(
+            ledger.get("tok-once").map(|grant| grant.status),
+            Some(ApprovalTokenStatus::Consumed)
+        );
+    }
+
+    #[test]
+    fn approval_token_rejects_scope_expansion_expiry_and_revocation() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("main");
+        let dev_scope = ApprovalScope::new("main_push_forbidden", "git push")
+            .with_repository("sisyphus/claw-code")
+            .with_branch("dev");
+
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-expiring", scope.clone(), "owner", "bot")
+                .expires_at(20),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-expiring", &dev_scope, "bot", 10),
+            Err(ApprovalTokenError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            ledger.verify("tok-expiring", &scope, "bot", 21),
+            Err(ApprovalTokenError::ApprovalExpired)
+        ));
+
+        ledger.insert(ApprovalTokenGrant::granted(
+            "tok-revoked",
+            scope.clone(),
+            "owner",
+            "bot",
+        ));
+        let revoked = ledger
+            .revoke("tok-revoked")
+            .expect("revocation should be audited");
+        assert_eq!(revoked.status, ApprovalTokenStatus::Revoked);
+        assert!(matches!(
+            ledger.verify("tok-revoked", &scope, "bot", 10),
+            Err(ApprovalTokenError::ApprovalRevoked)
+        ));
+    }
+
+    #[test]
+    fn approval_token_preserves_delegation_traceability() {
+        let mut ledger = ApprovalTokenLedger::new();
+        let scope = ApprovalScope::new("deploy_requires_owner", "deploy prod");
+        ledger.insert(
+            ApprovalTokenGrant::granted("tok-delegated", scope.clone(), "owner", "deploy-bot")
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("owner", "owner approval")
+                        .with_session_id("session-owner"),
+                )
+                .with_delegation_hop(
+                    ApprovalDelegationHop::new("lead-agent", "handoff to deploy bot")
+                        .with_session_id("session-lead"),
+                ),
+        );
+
+        assert!(matches!(
+            ledger.verify("tok-delegated", &scope, "unexpected-bot", 10),
+            Err(ApprovalTokenError::UnauthorizedDelegate { expected, actual })
+                if expected == "deploy-bot" && actual == "unexpected-bot"
+        ));
+
+        let audit = ledger
+            .consume("tok-delegated", &scope, "deploy-bot", 10)
+            .expect("approved delegate should consume token");
+        let actors = audit
+            .delegation_chain
+            .iter()
+            .map(|hop| hop.actor.as_str())
+            .collect::<Vec<_>>();
+
+        assert!(audit.delegated_execution);
+        assert_eq!(actors, vec!["owner", "lead-agent", "deploy-bot"]);
+        assert_eq!(audit.delegation_chain[0].session_id.as_deref(), Some("session-owner"));
+        assert_eq!(audit.delegation_chain[1].session_id.as_deref(), Some("session-lead"));
+    }
+
 }
