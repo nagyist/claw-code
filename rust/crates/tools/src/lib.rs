@@ -1212,24 +1212,34 @@ fn execute_tool_with_enforcer(
             run_bash(bash_input)
         }
         "read_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<ReadFileInput>(input).and_then(run_read_file)
+            let file_input: ReadFileInput = from_value(input)?;
+            let required_mode = classify_file_path_permission(&file_input.path, false);
+            maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
+            run_read_file(file_input)
         }
         "write_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<WriteFileInput>(input).and_then(run_write_file)
+            let file_input: WriteFileInput = from_value(input)?;
+            let required_mode = classify_file_path_permission(&file_input.path, true);
+            maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
+            run_write_file(file_input)
         }
         "edit_file" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<EditFileInput>(input).and_then(run_edit_file)
+            let file_input: EditFileInput = from_value(input)?;
+            let required_mode = classify_file_path_permission(&file_input.path, false);
+            maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
+            run_edit_file(file_input)
         }
         "glob_search" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<GlobSearchInputValue>(input).and_then(run_glob_search)
+            let glob_input: GlobSearchInputValue = from_value(input)?;
+            let required_mode = classify_glob_permission(&glob_input);
+            maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
+            run_glob_search(glob_input)
         }
         "grep_search" => {
-            maybe_enforce_permission_check(enforcer, name, input)?;
-            from_value::<GrepSearchInput>(input).and_then(run_grep_search)
+            let grep_input: GrepSearchInput = from_value(input)?;
+            let required_mode = classify_grep_permission(&grep_input);
+            maybe_enforce_permission_check_with_mode(enforcer, name, input, required_mode)?;
+            run_grep_search(grep_input)
         }
         "WebFetch" => from_value::<WebFetchInput>(input).and_then(run_web_fetch),
         "WebSearch" => from_value::<WebSearchInput>(input).and_then(run_web_search),
@@ -1296,17 +1306,6 @@ fn execute_tool_with_enforcer(
         }
         _ => Err(format!("unsupported tool: {name}")),
     }
-}
-
-fn maybe_enforce_permission_check(
-    enforcer: Option<&PermissionEnforcer>,
-    tool_name: &str,
-    input: &Value,
-) -> Result<(), String> {
-    if let Some(enforcer) = enforcer {
-        enforce_permission_check(enforcer, tool_name, input)?;
-    }
-    Ok(())
 }
 
 /// Enforce permission check with a dynamically classified permission mode.
@@ -2209,6 +2208,76 @@ fn run_structured_output(input: StructuredOutputInput) -> Result<String, String>
 
 fn run_repl(input: ReplInput) -> Result<String, String> {
     to_pretty_json(execute_repl(input)?)
+}
+
+fn classify_file_path_permission(path: &str, allow_missing: bool) -> PermissionMode {
+    if path_within_current_workspace(path, allow_missing) {
+        PermissionMode::WorkspaceWrite
+    } else {
+        PermissionMode::DangerFullAccess
+    }
+}
+
+fn classify_glob_permission(input: &GlobSearchInputValue) -> PermissionMode {
+    let base_allowed = input
+        .path
+        .as_deref()
+        .is_none_or(|path| path_within_current_workspace(path, false));
+    let pattern_allowed = path_within_current_workspace(&input.pattern, true);
+    if base_allowed && pattern_allowed {
+        PermissionMode::WorkspaceWrite
+    } else {
+        PermissionMode::DangerFullAccess
+    }
+}
+
+fn classify_grep_permission(input: &GrepSearchInput) -> PermissionMode {
+    if input
+        .path
+        .as_deref()
+        .is_none_or(|path| path_within_current_workspace(path, false))
+    {
+        PermissionMode::WorkspaceWrite
+    } else {
+        PermissionMode::DangerFullAccess
+    }
+}
+
+fn path_within_current_workspace(path: &str, allow_missing: bool) -> bool {
+    let trimmed = path.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '`' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}'
+        )
+    });
+    if looks_like_windows_absolute_path(trimmed) {
+        return false;
+    }
+
+    let Ok(cwd) = std::env::current_dir() else {
+        return false;
+    };
+    let candidate = PathBuf::from(trimmed);
+    let absolute = if candidate.is_absolute() {
+        candidate
+    } else {
+        cwd.join(candidate)
+    };
+
+    let resolved = if allow_missing {
+        absolute
+            .parent()
+            .and_then(|parent| parent.canonicalize().ok())
+            .map(|parent| parent.join(absolute.file_name().unwrap_or_default()))
+            .unwrap_or(absolute)
+    } else {
+        match absolute.canonicalize() {
+            Ok(path) => path,
+            Err(_) => absolute,
+        }
+    };
+
+    resolved.starts_with(cwd)
 }
 
 /// Classify `PowerShell` command permission based on command type and path.
