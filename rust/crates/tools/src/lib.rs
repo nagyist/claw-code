@@ -1884,7 +1884,9 @@ fn classify_bash_permission(command: &str) -> PermissionMode {
 fn has_dangerous_paths(command: &str) -> bool {
     // Look for absolute paths
     let tokens: Vec<&str> = command.split_whitespace().collect();
-    let cwd = std::env::current_dir().ok();
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|cwd| cwd.canonicalize().unwrap_or(cwd));
 
     for token in tokens {
         let token = token.trim_matches(|ch: char| {
@@ -2257,6 +2259,7 @@ fn path_within_current_workspace(path: &str, allow_missing: bool) -> bool {
     let Ok(cwd) = std::env::current_dir() else {
         return false;
     };
+    let cwd = cwd.canonicalize().unwrap_or(cwd);
     let candidate = PathBuf::from(trimmed);
     let absolute = if candidate.is_absolute() {
         candidate
@@ -2354,7 +2357,9 @@ fn is_within_workspace(path: &str) -> bool {
     // If path is absolute, check if it starts with CWD
     if path.is_absolute() {
         if let Ok(cwd) = std::env::current_dir() {
-            return path.starts_with(&cwd);
+            let cwd = cwd.canonicalize().unwrap_or(cwd);
+            let resolved = path.canonicalize().unwrap_or(path);
+            return resolved.starts_with(&cwd);
         }
     }
 
