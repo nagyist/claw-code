@@ -122,9 +122,9 @@ pub use oauth::{
 };
 pub use permissions::{
     ApprovalDelegationHop, ApprovalScope, ApprovalTokenAudit, ApprovalTokenError,
-    ApprovalTokenGrant, ApprovalTokenLedger, ApprovalTokenStatus, PermissionContext, PermissionMode,
-    PermissionOutcome, PermissionOverride, PermissionPolicy, PermissionPromptDecision,
-    PermissionPrompter, PermissionRequest,
+    ApprovalTokenGrant, ApprovalTokenLedger, ApprovalTokenStatus, PermissionContext,
+    PermissionMode, PermissionOutcome, PermissionOverride, PermissionPolicy,
+    PermissionPromptDecision, PermissionPrompter, PermissionRequest,
 };
 pub use plugin_lifecycle::{
     DegradedMode, DiscoveryResult, PluginHealthcheck, PluginLifecycle, PluginLifecycleEvent,

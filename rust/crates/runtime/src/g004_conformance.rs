@@ -42,19 +42,10 @@ impl G004ConformanceError {
 pub fn validate_g004_contract_bundle(bundle: &Value) -> Vec<G004ConformanceError> {
     let mut errors = Vec::new();
 
-    require_string_eq(
-        bundle,
-        "/schemaVersion",
-        BUNDLE_SCHEMA_VERSION,
-        &mut errors,
-    );
+    require_string_eq(bundle, "/schemaVersion", BUNDLE_SCHEMA_VERSION, &mut errors);
     validate_lane_events(bundle.get("laneEvents"), "/laneEvents", &mut errors);
     validate_reports(bundle.get("reports"), "/reports", &mut errors);
-    validate_approval_tokens(
-        bundle.get("approvalTokens"),
-        "/approvalTokens",
-        &mut errors,
-    );
+    validate_approval_tokens(bundle.get("approvalTokens"), "/approvalTokens", &mut errors);
 
     errors
 }
@@ -64,11 +55,7 @@ pub fn is_g004_contract_bundle_valid(bundle: &Value) -> bool {
     validate_g004_contract_bundle(bundle).is_empty()
 }
 
-fn validate_lane_events(
-    value: Option<&Value>,
-    path: &str,
-    errors: &mut Vec<G004ConformanceError>,
-) {
+fn validate_lane_events(value: Option<&Value>, path: &str, errors: &mut Vec<G004ConformanceError>) {
     let Some(events) = non_empty_array(value, path, errors) else {
         return;
     };
@@ -315,5 +302,16 @@ fn is_terminal_event_value(value: Option<&Value>) -> bool {
 }
 
 fn get_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
-    root.pointer(path)
+    if let Some(value) = root.pointer(path) {
+        return Some(value);
+    }
+
+    let segments = path.trim_start_matches('/').split('/').collect::<Vec<_>>();
+    for index in 1..segments.len() {
+        let relative = format!("/{}", segments[index..].join("/"));
+        if let Some(value) = root.pointer(&relative) {
+            return Some(value);
+        }
+    }
+    None
 }

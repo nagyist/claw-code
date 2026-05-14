@@ -1,6 +1,4 @@
-use runtime::g004_conformance::{
-    is_g004_contract_bundle_valid, validate_g004_contract_bundle,
-};
+use runtime::g004_conformance::{is_g004_contract_bundle_valid, validate_g004_contract_bundle};
 use serde_json::{json, Value};
 
 fn valid_bundle() -> Value {
@@ -14,7 +12,10 @@ fn valid_g004_contract_bundle_fixture_passes_conformance() {
 
     let errors = validate_g004_contract_bundle(&fixture);
 
-    assert!(errors.is_empty(), "unexpected conformance errors: {errors:?}");
+    assert!(
+        errors.is_empty(),
+        "unexpected conformance errors: {errors:?}"
+    );
     assert!(is_g004_contract_bundle_valid(&fixture));
 }
 
