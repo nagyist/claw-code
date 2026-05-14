@@ -2270,7 +2270,17 @@ fn extract_powershell_path(command: &str) -> Option<String> {
 
 /// Check if a path is within the current workspace.
 fn is_within_workspace(path: &str) -> bool {
-    let path = PathBuf::from(path);
+    let trimmed = path.trim_matches(|ch: char| {
+        matches!(
+            ch,
+            '"' | '\'' | '`' | ',' | ';' | ')' | '(' | '[' | ']' | '{' | '}'
+        )
+    });
+    if looks_like_windows_absolute_path(trimmed) {
+        return false;
+    }
+
+    let path = PathBuf::from(trimmed);
 
     // If path is absolute, check if it starts with CWD
     if path.is_absolute() {
