@@ -63,12 +63,27 @@ fn validate_lane_events(value: Option<&Value>, path: &str, errors: &mut Vec<G004
     let mut previous_seq = None;
     for (index, event) in events.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_non_empty_string(event, &format!("{base}/event"), errors);
-        require_non_empty_string(event, &format!("{base}/status"), errors);
-        require_non_empty_string(event, &format!("{base}/emittedAt"), errors);
-        require_non_empty_string(event, &format!("{base}/metadata/provenance"), errors);
-        require_non_empty_string(event, &format!("{base}/metadata/emitterIdentity"), errors);
-        require_non_empty_string(event, &format!("{base}/metadata/environmentLabel"), errors);
+        require_non_empty_string_at(event, "/event", &format!("{base}/event"), errors);
+        require_non_empty_string_at(event, "/status", &format!("{base}/status"), errors);
+        require_non_empty_string_at(event, "/emittedAt", &format!("{base}/emittedAt"), errors);
+        require_non_empty_string_at(
+            event,
+            "/metadata/provenance",
+            &format!("{base}/metadata/provenance"),
+            errors,
+        );
+        require_non_empty_string_at(
+            event,
+            "/metadata/emitterIdentity",
+            &format!("{base}/metadata/emitterIdentity"),
+            errors,
+        );
+        require_non_empty_string_at(
+            event,
+            "/metadata/environmentLabel",
+            &format!("{base}/metadata/environmentLabel"),
+            errors,
+        );
 
         match get_path(event, "/metadata/seq").and_then(Value::as_u64) {
             Some(seq) => {
@@ -89,7 +104,12 @@ fn validate_lane_events(value: Option<&Value>, path: &str, errors: &mut Vec<G004
         }
 
         if is_terminal_event_value(event.get("event")) {
-            require_non_empty_string(event, &format!("{base}/metadata/eventFingerprint"), errors);
+            require_non_empty_string_at(
+                event,
+                "/metadata/eventFingerprint",
+                &format!("{base}/metadata/eventFingerprint"),
+                errors,
+            );
         }
     }
 }
@@ -101,16 +121,32 @@ fn validate_reports(value: Option<&Value>, path: &str, errors: &mut Vec<G004Conf
 
     for (index, report) in reports.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_string_eq(
+        require_string_eq_at(
             report,
+            "/schemaVersion",
             &format!("{base}/schemaVersion"),
             REPORT_SCHEMA_VERSION,
             errors,
         );
-        require_non_empty_string(report, &format!("{base}/reportId"), errors);
-        require_non_empty_string(report, &format!("{base}/identity/contentHash"), errors);
-        require_non_empty_string(report, &format!("{base}/projection/provenance"), errors);
-        require_non_empty_string(report, &format!("{base}/redaction/provenance"), errors);
+        require_non_empty_string_at(report, "/reportId", &format!("{base}/reportId"), errors);
+        require_non_empty_string_at(
+            report,
+            "/identity/contentHash",
+            &format!("{base}/identity/contentHash"),
+            errors,
+        );
+        require_non_empty_string_at(
+            report,
+            "/projection/provenance",
+            &format!("{base}/projection/provenance"),
+            errors,
+        );
+        require_non_empty_string_at(
+            report,
+            "/redaction/provenance",
+            &format!("{base}/redaction/provenance"),
+            errors,
+        );
         non_empty_array(
             get_path(report, "/consumerCapabilities"),
             &format!("{base}/consumerCapabilities"),
@@ -136,19 +172,21 @@ fn validate_findings(value: Option<&Value>, path: &str, errors: &mut Vec<G004Con
 
     for (index, finding) in findings.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_one_of(
+        require_one_of_at(
             finding,
+            "/kind",
             &format!("{base}/kind"),
             &["fact", "hypothesis", "negative_evidence"],
             errors,
         );
-        require_one_of(
+        require_one_of_at(
             finding,
+            "/confidence",
             &format!("{base}/confidence"),
             &["low", "medium", "high"],
             errors,
         );
-        require_non_empty_string(finding, &format!("{base}/statement"), errors);
+        require_non_empty_string_at(finding, "/statement", &format!("{base}/statement"), errors);
     }
 }
 
@@ -163,10 +201,25 @@ fn validate_field_deltas(
 
     for (index, delta) in deltas.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_non_empty_string(delta, &format!("{base}/field"), errors);
-        require_non_empty_string(delta, &format!("{base}/previousHash"), errors);
-        require_non_empty_string(delta, &format!("{base}/currentHash"), errors);
-        require_non_empty_string(delta, &format!("{base}/attribution"), errors);
+        require_non_empty_string_at(delta, "/field", &format!("{base}/field"), errors);
+        require_non_empty_string_at(
+            delta,
+            "/previousHash",
+            &format!("{base}/previousHash"),
+            errors,
+        );
+        require_non_empty_string_at(
+            delta,
+            "/currentHash",
+            &format!("{base}/currentHash"),
+            errors,
+        );
+        require_non_empty_string_at(
+            delta,
+            "/attribution",
+            &format!("{base}/attribution"),
+            errors,
+        );
     }
 }
 
@@ -181,12 +234,17 @@ fn validate_approval_tokens(
 
     for (index, token) in tokens.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_non_empty_string(token, &format!("{base}/tokenId"), errors);
-        require_non_empty_string(token, &format!("{base}/owner"), errors);
-        require_non_empty_string(token, &format!("{base}/scope"), errors);
-        require_non_empty_string(token, &format!("{base}/issuedAt"), errors);
-        require_bool_true(token, &format!("{base}/oneTimeUse"), errors);
-        require_non_empty_string(token, &format!("{base}/replayPreventionNonce"), errors);
+        require_non_empty_string_at(token, "/tokenId", &format!("{base}/tokenId"), errors);
+        require_non_empty_string_at(token, "/owner", &format!("{base}/owner"), errors);
+        require_non_empty_string_at(token, "/scope", &format!("{base}/scope"), errors);
+        require_non_empty_string_at(token, "/issuedAt", &format!("{base}/issuedAt"), errors);
+        require_bool_true_at(token, "/oneTimeUse", &format!("{base}/oneTimeUse"), errors);
+        require_non_empty_string_at(
+            token,
+            "/replayPreventionNonce",
+            &format!("{base}/replayPreventionNonce"),
+            errors,
+        );
         validate_delegation_chain(
             get_path(token, "/delegationChain"),
             &format!("{base}/delegationChain"),
@@ -206,10 +264,10 @@ fn validate_delegation_chain(
 
     for (index, hop) in chain.iter().enumerate() {
         let base = format!("{path}/{index}");
-        require_non_empty_string(hop, &format!("{base}/from"), errors);
-        require_non_empty_string(hop, &format!("{base}/to"), errors);
-        require_non_empty_string(hop, &format!("{base}/action"), errors);
-        require_non_empty_string(hop, &format!("{base}/at"), errors);
+        require_non_empty_string_at(hop, "/from", &format!("{base}/from"), errors);
+        require_non_empty_string_at(hop, "/to", &format!("{base}/to"), errors);
+        require_non_empty_string_at(hop, "/action", &format!("{base}/action"), errors);
+        require_non_empty_string_at(hop, "/at", &format!("{base}/at"), errors);
     }
 }
 
@@ -240,55 +298,79 @@ fn require_string_eq(
     expected: &str,
     errors: &mut Vec<G004ConformanceError>,
 ) {
-    match get_path(root, path).and_then(Value::as_str) {
+    require_string_eq_at(root, path, path, expected, errors);
+}
+
+fn require_string_eq_at(
+    root: &Value,
+    pointer: &str,
+    error_path: &str,
+    expected: &str,
+    errors: &mut Vec<G004ConformanceError>,
+) {
+    match get_path(root, pointer).and_then(Value::as_str) {
         Some(actual) if actual == expected => {}
         Some(actual) => errors.push(G004ConformanceError::new(
-            path,
+            error_path,
             format!("expected '{expected}', got '{actual}'"),
         )),
         None => errors.push(G004ConformanceError::new(
-            path,
+            error_path,
             "required string field missing",
         )),
     }
 }
 
-fn require_non_empty_string(root: &Value, path: &str, errors: &mut Vec<G004ConformanceError>) {
-    match get_path(root, path).and_then(Value::as_str) {
-        Some(value) if !value.trim().is_empty() => {}
-        Some(_) => errors.push(G004ConformanceError::new(path, "string must not be empty")),
-        None => errors.push(G004ConformanceError::new(
-            path,
-            "required string field missing",
-        )),
-    }
-}
-
-fn require_one_of(
+fn require_non_empty_string_at(
     root: &Value,
-    path: &str,
+    pointer: &str,
+    error_path: &str,
+    errors: &mut Vec<G004ConformanceError>,
+) {
+    match get_path(root, pointer).and_then(Value::as_str) {
+        Some(value) if !value.trim().is_empty() => {}
+        Some(_) => errors.push(G004ConformanceError::new(
+            error_path,
+            "string must not be empty",
+        )),
+        None => errors.push(G004ConformanceError::new(
+            error_path,
+            "required string field missing",
+        )),
+    }
+}
+
+fn require_one_of_at(
+    root: &Value,
+    pointer: &str,
+    error_path: &str,
     allowed: &[&str],
     errors: &mut Vec<G004ConformanceError>,
 ) {
-    match get_path(root, path).and_then(Value::as_str) {
+    match get_path(root, pointer).and_then(Value::as_str) {
         Some(value) if allowed.contains(&value) => {}
         Some(value) => errors.push(G004ConformanceError::new(
-            path,
+            error_path,
             format!("'{value}' is not one of {}", allowed.join(", ")),
         )),
         None => errors.push(G004ConformanceError::new(
-            path,
+            error_path,
             "required string field missing",
         )),
     }
 }
 
-fn require_bool_true(root: &Value, path: &str, errors: &mut Vec<G004ConformanceError>) {
-    match get_path(root, path).and_then(Value::as_bool) {
+fn require_bool_true_at(
+    root: &Value,
+    pointer: &str,
+    error_path: &str,
+    errors: &mut Vec<G004ConformanceError>,
+) {
+    match get_path(root, pointer).and_then(Value::as_bool) {
         Some(true) => {}
-        Some(false) => errors.push(G004ConformanceError::new(path, "must be true")),
+        Some(false) => errors.push(G004ConformanceError::new(error_path, "must be true")),
         None => errors.push(G004ConformanceError::new(
-            path,
+            error_path,
             "required boolean field missing",
         )),
     }
