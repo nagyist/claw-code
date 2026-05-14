@@ -113,13 +113,16 @@ def extract_path_candidates(payload: str) -> tuple[str, ...]:
         tokens = shlex.split(payload, posix=True)
     except ValueError:
         tokens = payload.split()
+    raw_tokens = payload.split()
     candidates: list[str] = []
-    for token in tokens:
+    for token in (*tokens, *raw_tokens):
         if not token or token.startswith('-') or _ENV_ASSIGNMENT_RE.match(token):
             continue
         expanded = os.path.expandvars(os.path.expanduser(token))
         if _looks_like_path(token) or _looks_like_path(expanded):
-            candidates.append(expanded)
+            candidate = expanded if _looks_like_path(expanded) else token
+            if candidate not in candidates:
+                candidates.append(candidate)
     return tuple(candidates)
 
 
