@@ -172,6 +172,8 @@ fn inventory_commands_emit_structured_json_when_requested() {
     let mcp = assert_json_command(&root, &["--output-format", "json", "mcp"]);
     assert_eq!(mcp["kind"], "mcp");
     assert_eq!(mcp["action"], "list");
+    assert_eq!(mcp["status"], "ok");
+    assert!(mcp["config_load_error"].is_null());
 
     let skills = assert_json_command(&root, &["--output-format", "json", "skills"]);
     assert_eq!(skills["kind"], "skills");
@@ -180,6 +182,10 @@ fn inventory_commands_emit_structured_json_when_requested() {
     let plugins = assert_json_command(&root, &["--output-format", "json", "plugins"]);
     assert_eq!(plugins["kind"], "plugin");
     assert_eq!(plugins["action"], "list");
+    assert_eq!(plugins["status"], "ok");
+    assert!(plugins["config_load_error"].is_null());
+    assert_eq!(plugins["status"], "ok");
+    assert!(plugins["config_load_error"].is_null());
     assert!(
         plugins["reload_runtime"].is_boolean(),
         "plugins reload_runtime should be a boolean"
@@ -395,6 +401,7 @@ fn doctor_and_resume_status_emit_json_when_requested() {
 
     let doctor = assert_json_command(&root, &["--output-format", "json", "doctor"]);
     assert_eq!(doctor["kind"], "doctor");
+    assert_eq!(doctor["status"], "ok");
     assert!(doctor["message"].is_string());
     let summary = doctor["summary"].as_object().expect("doctor summary");
     assert!(summary["ok"].as_u64().is_some());

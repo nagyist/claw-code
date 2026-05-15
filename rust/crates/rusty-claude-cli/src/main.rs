@@ -1971,6 +1971,17 @@ impl DoctorReport {
         self.checks.iter().any(|check| check.level.is_failure())
     }
 
+    fn status(&self) -> &'static str {
+        let (_, warn_count, fail_count) = self.counts();
+        if fail_count > 0 {
+            "fail"
+        } else if warn_count > 0 {
+            "warn"
+        } else {
+            "ok"
+        }
+    }
+
     fn render(&self) -> String {
         let (ok_count, warn_count, fail_count) = self.counts();
         let mut lines = vec![
@@ -1988,6 +1999,7 @@ impl DoctorReport {
         let (ok_count, warn_count, fail_count) = self.counts();
         json!({
             "kind": "doctor",
+            "status": self.status(),
             "message": report,
             "report": report,
             "has_failures": self.has_failures(),
