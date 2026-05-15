@@ -2726,7 +2726,7 @@ mod tests {
                 (
                     "broken".to_string(),
                     ScopedMcpServerConfig {
-                        required: true,
+                        required: false,
                         scope: ConfigSource::Local,
                         config: McpServerConfig::Stdio(McpStdioServerConfig {
                             command: broken_script_path.display().to_string(),
