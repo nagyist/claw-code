@@ -175,6 +175,7 @@ Canonical scenario map: `rust/mock_parity_scenarios.json`
 - [ ] End-to-end MCP runtime lifecycle beyond the registry bridge now on `main`
 - [x] Output truncation (large stdout/file content)
 - [x] Session compaction behavior matching
+  - auto_compaction threshold from env
 - [x] Token counting / cost tracking accuracy
 - [x] Bash validation lane merged onto `main`
 - [ ] CI green on every commit
