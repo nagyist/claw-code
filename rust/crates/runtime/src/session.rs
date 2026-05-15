@@ -1037,7 +1037,10 @@ fn persisted_block_json(block: &ContentBlock) -> JsonValue {
     match block {
         ContentBlock::Text { text } => {
             object.insert("type".to_string(), JsonValue::String("text".to_string()));
-            object.insert("text".to_string(), JsonValue::String(sanitize_jsonl_field(text)));
+            object.insert(
+                "text".to_string(),
+                JsonValue::String(sanitize_jsonl_field(text)),
+            );
         }
         ContentBlock::Thinking {
             thinking,
@@ -1063,7 +1066,10 @@ fn persisted_block_json(block: &ContentBlock) -> JsonValue {
                 "type".to_string(),
                 JsonValue::String("tool_use".to_string()),
             );
-            object.insert("id".to_string(), JsonValue::String(sanitize_jsonl_field(id)));
+            object.insert(
+                "id".to_string(),
+                JsonValue::String(sanitize_jsonl_field(id)),
+            );
             object.insert("name".to_string(), JsonValue::String(name.clone()));
             object.insert(
                 "input".to_string(),
@@ -1084,7 +1090,10 @@ fn persisted_block_json(block: &ContentBlock) -> JsonValue {
                 "tool_use_id".to_string(),
                 JsonValue::String(sanitize_jsonl_field(tool_use_id)),
             );
-            object.insert("tool_name".to_string(), JsonValue::String(tool_name.clone()));
+            object.insert(
+                "tool_name".to_string(),
+                JsonValue::String(tool_name.clone()),
+            );
             object.insert(
                 "output".to_string(),
                 JsonValue::String(sanitize_jsonl_field(output)),
@@ -1514,6 +1523,54 @@ mod tests {
 
         assert_eq!(restored.messages.len(), 2);
         assert_eq!(restored.messages[0], ConversationMessage::user_text("hi"));
+    }
+
+    #[test]
+    fn jsonl_persistence_redacts_and_truncates_oversized_payload_fields() {
+        let path = temp_session_path("jsonl-safeguards");
+        let secret = "sk-live-secret-should-not-persist";
+        let oversized_output = format!(
+            "OPENAI_API_KEY={secret}\n{}",
+            "tool-output ".repeat(super::MAX_JSONL_FIELD_CHARS)
+        );
+        let mut session = Session::new();
+        session
+            .push_message(ConversationMessage::assistant(vec![
+                ContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "bash".to_string(),
+                    input: format!("Authorization: Bearer {secret}"),
+                },
+            ]))
+            .expect("tool use should append");
+        session
+            .push_message(ConversationMessage::tool_result(
+                "tool-1",
+                "bash",
+                oversized_output,
+                false,
+            ))
+            .expect("tool result should append");
+
+        session.save_to_path(&path).expect("session should save");
+        let persisted = fs::read_to_string(&path).expect("session jsonl should read");
+        let restored = Session::load_from_path(&path).expect("session should load");
+        fs::remove_file(&path).expect("temp file should be removable");
+
+        assert!(
+            !persisted.contains(secret),
+            "secret leaked into JSONL: {persisted}"
+        );
+        assert!(persisted.contains(super::JSONL_REDACTION_MARKER));
+        assert!(persisted.contains(super::JSONL_TRUNCATION_MARKER));
+
+        let ContentBlock::ToolResult { output, .. } = &restored.messages[1].blocks[0] else {
+            panic!("restored second message should be a tool result");
+        };
+        assert!(!output.contains(secret));
+        assert!(output.contains(super::JSONL_REDACTION_MARKER));
+        assert!(output.ends_with(super::JSONL_TRUNCATION_MARKER));
+        assert!(output.chars().count() <= super::MAX_JSONL_FIELD_CHARS);
     }
 
     #[test]
