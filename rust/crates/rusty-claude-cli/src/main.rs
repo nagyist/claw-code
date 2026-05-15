@@ -219,6 +219,7 @@ fn main() {
                     "error": short_reason,
                     "kind": kind,
                     "hint": hint,
+                    "exit_code": 1,
                 })
             );
         } else {
@@ -262,6 +263,8 @@ fn classify_error_kind(message: &str) -> &'static str {
         "session_load_failed"
     } else if message.contains("no managed sessions found") {
         "no_managed_sessions"
+    } else if message.contains("unsupported ACP invocation") {
+        "unsupported_acp_invocation"
     } else if message.contains("unrecognized argument") || message.contains("unknown option") {
         "cli_parse"
     } else if message.contains("invalid model syntax") {
@@ -6916,34 +6919,58 @@ fn print_help_topic(
     Ok(())
 }
 
+fn acp_status_message() -> &'static str {
+    "ACP/Zed editor integration is not implemented in claw-code yet. `claw acp serve` is only a discoverability alias today; it does not launch a daemon, JSON-RPC endpoint, or Zed-specific protocol endpoint. Use the normal terminal surfaces for now and track ROADMAP #76 for real ACP support."
+}
+
+fn acp_status_json() -> serde_json::Value {
+    json!({
+        "schema_version": "1.0",
+        "kind": "acp",
+        "status": "unsupported",
+        "phase": "discoverability_only",
+        "supported": false,
+        "exit_code": 0,
+        "serve_alias_only": true,
+        "message": acp_status_message(),
+        "launch_command": serde_json::Value::Null,
+        "protocol": {
+            "name": "ACP/Zed",
+            "json_rpc": false,
+            "daemon": false,
+            "endpoint": serde_json::Value::Null,
+            "serve_starts_daemon": false
+        },
+        "contracts": {
+            "blocking_gates": [
+                "task_packet_schema",
+                "session_control_schema",
+                "event_report_schema"
+            ],
+            "stable_status_surface": "claw acp [serve] --output-format json",
+            "unsupported_invocation_kind": "unsupported_acp_invocation"
+        },
+        "aliases": ["acp", "--acp", "-acp"],
+        "discoverability_tracking": "ROADMAP #64a",
+        "tracking": "ROADMAP #76 / #3033 / #3004",
+        "recommended_workflows": [
+            "claw prompt TEXT",
+            "claw",
+            "claw doctor"
+        ],
+    })
+}
+
 fn print_acp_status(output_format: CliOutputFormat) -> Result<(), Box<dyn std::error::Error>> {
-    let message = "ACP/Zed editor integration is not implemented in claw-code yet. `claw acp serve` is only a discoverability alias today; it does not launch a daemon or Zed-specific protocol endpoint. Use the normal terminal surfaces for now and track ROADMAP #76 for real ACP support.";
     match output_format {
         CliOutputFormat::Text => {
             println!(
-                "ACP / Zed\n  Status           discoverability only\n  Launch           `claw acp serve` / `claw --acp` / `claw -acp` report status only; no editor daemon is available yet\n  Today            use `claw prompt`, the REPL, or `claw doctor` for local verification\n  Tracking         ROADMAP #76\n  Message          {message}"
+                "ACP / Zed\n  Status           unsupported (discoverability only)\n  Exit code        0 for status queries; unsupported invocations exit 1\n  Launch           `claw acp serve` / `claw --acp` / `claw -acp` report status only; no editor daemon or JSON-RPC endpoint is available yet\n  Today            use `claw prompt`, the REPL, or `claw doctor` for local verification\n  Tracking         ROADMAP #76 / #3033 / #3004\n  Message          {}",
+                acp_status_message()
             );
         }
         CliOutputFormat::Json => {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json!({
-                    "kind": "acp",
-                    "status": "discoverability_only",
-                    "supported": false,
-                    "serve_alias_only": true,
-                    "message": message,
-                    "launch_command": serde_json::Value::Null,
-                    "aliases": ["acp", "--acp", "-acp"],
-                    "discoverability_tracking": "ROADMAP #64a",
-                    "tracking": "ROADMAP #76",
-                    "recommended_workflows": [
-                        "claw prompt TEXT",
-                        "claw",
-                        "claw doctor"
-                    ],
-                }))?
-            );
+            println!("{}", serde_json::to_string_pretty(&acp_status_json())?);
         }
     }
     Ok(())
@@ -11394,6 +11421,41 @@ mod tests {
                 output_format: CliOutputFormat::Text,
             }
         );
+        assert_eq!(
+            parse_args(&[
+                "acp".to_string(),
+                "serve".to_string(),
+                "--output-format".to_string(),
+                "json".to_string()
+            ])
+            .expect("acp serve json should parse"),
+            CliAction::Acp {
+                output_format: CliOutputFormat::Json,
+            }
+        );
+        let unsupported = parse_args(&["acp".to_string(), "start".to_string()])
+            .expect_err("unknown ACP subcommand should fail with a typed contract");
+        assert!(unsupported.contains("unsupported ACP invocation"));
+    }
+
+    #[test]
+    fn acp_status_json_is_truthful_unsupported_contract() {
+        let value = acp_status_json();
+        assert_eq!(value["schema_version"], "1.0");
+        assert_eq!(value["kind"], "acp");
+        assert_eq!(value["status"], "unsupported");
+        assert_eq!(value["phase"], "discoverability_only");
+        assert_eq!(value["supported"], false);
+        assert_eq!(value["exit_code"], 0);
+        assert_eq!(value["serve_alias_only"], true);
+        assert_eq!(value["protocol"]["json_rpc"], false);
+        assert_eq!(value["protocol"]["daemon"], false);
+        assert_eq!(value["protocol"]["serve_starts_daemon"], false);
+        assert!(value["protocol"]["endpoint"].is_null());
+        assert_eq!(
+            value["contracts"]["unsupported_invocation_kind"],
+            "unsupported_acp_invocation"
+        );
     }
 
     #[test]
@@ -11891,6 +11953,10 @@ mod tests {
         assert_eq!(
             classify_error_kind("unrecognized argument `--foo` for subcommand `doctor`"),
             "cli_parse"
+        );
+        assert_eq!(
+            classify_error_kind("unsupported ACP invocation. Use `claw acp`."),
+            "unsupported_acp_invocation"
         );
         assert_eq!(
             classify_error_kind("invalid model syntax: 'gpt-4'. Expected ..."),
