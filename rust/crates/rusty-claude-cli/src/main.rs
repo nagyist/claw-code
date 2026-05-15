@@ -5734,10 +5734,9 @@ impl LiveCli {
         target: Option<&str>,
     ) -> Result<bool, Box<dyn std::error::Error>> {
         let cwd = env::current_dir()?;
-        let loader = ConfigLoader::default_for(&cwd);
         let payload = plugins_command_payload_for(&cwd, action, target)?;
         println!("{}", payload.message);
-        if result.reload_runtime {
+        if payload.reload_runtime {
             self.reload_runtime_features()?;
         }
         Ok(false)
