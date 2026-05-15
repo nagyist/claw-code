@@ -42,6 +42,9 @@ async fn send_message_uses_openai_compatible_endpoint_and_auth() {
         .expect("request should succeed");
 
     assert_eq!(response.model, "grok-3");
+    assert_eq!(response.usage.input_tokens, 8);
+    assert_eq!(response.usage.cache_read_input_tokens, 3);
+    assert_eq!(response.usage.output_tokens, 5);
     assert_eq!(response.total_tokens(), 16);
     assert_eq!(
         response.content,
@@ -284,7 +287,7 @@ async fn openai_streaming_requests_opt_into_usage_chunks() {
     let sse = concat!(
         "data: {\"id\":\"chatcmpl_openai_stream\",\"model\":\"gpt-5\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n",
         "data: {\"id\":\"chatcmpl_openai_stream\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
-        "data: {\"id\":\"chatcmpl_openai_stream\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4}}\n\n",
+        "data: {\"id\":\"chatcmpl_openai_stream\",\"choices\":[],\"usage\":{\"prompt_tokens\":9,\"completion_tokens\":4,\"prompt_tokens_details\":{\"cached_tokens\":2}}}\n\n",
         "data: [DONE]\n\n"
     );
     let server = spawn_server(
@@ -339,8 +342,10 @@ async fn openai_streaming_requests_opt_into_usage_chunks() {
 
     match &events[4] {
         StreamEvent::MessageDelta(MessageDeltaEvent { usage, .. }) => {
-            assert_eq!(usage.input_tokens, 9);
+            assert_eq!(usage.input_tokens, 7);
+            assert_eq!(usage.cache_read_input_tokens, 2);
             assert_eq!(usage.output_tokens, 4);
+            assert_eq!(usage.total_tokens(), 13);
         }
         other => panic!("expected message delta, got {other:?}"),
     }
