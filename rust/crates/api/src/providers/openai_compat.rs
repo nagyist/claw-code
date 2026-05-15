@@ -332,8 +332,9 @@ fn jitter_for_base(base: Duration) -> Duration {
     }
     let raw_nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|elapsed| u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX)
+        });
     let tick = JITTER_COUNTER.fetch_add(1, Ordering::Relaxed);
     let mut mixed = raw_nanos
         .wrapping_add(tick)
@@ -468,6 +469,7 @@ impl StreamState {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     fn ingest_chunk(&mut self, chunk: ChatCompletionChunk) -> Result<Vec<StreamEvent>, ApiError> {
         let mut events = Vec::new();
         if !self.message_started {
@@ -878,7 +880,7 @@ pub fn is_reasoning_model(model: &str) -> bool {
         || canonical.contains("thinking")
 }
 
-/// Returns true for OpenAI-compatible DeepSeek V4 models that require prior
+/// Returns true for OpenAI-compatible `DeepSeek` V4 models that require prior
 /// assistant reasoning to be echoed back as `reasoning_content` in history.
 #[must_use]
 pub fn model_requires_reasoning_content_in_history(model: &str) -> bool {
@@ -939,6 +941,7 @@ fn wire_model_for_base_url<'a>(
 
 /// Estimate the serialized JSON size of a request payload in bytes.
 /// This is a pre-flight check to avoid hitting provider-specific size limits.
+#[must_use]
 pub fn estimate_request_body_size(request: &MessageRequest, config: OpenAiCompatConfig) -> usize {
     estimate_request_body_size_for_base_url(request, config, &read_base_url(config))
 }
@@ -984,6 +987,7 @@ fn check_request_body_size_for_base_url(
 
 /// Builds a chat completion request payload from a `MessageRequest`.
 /// Public for benchmarking purposes.
+#[must_use]
 pub fn build_chat_completion_request(
     request: &MessageRequest,
     config: OpenAiCompatConfig,
@@ -1184,8 +1188,7 @@ pub fn translate_message(message: &InputMessage, model: &str) -> Vec<Value> {
                     }
                     Some(msg)
                 }
-                InputContentBlock::Thinking { .. } => None,
-                InputContentBlock::ToolUse { .. } => None,
+                InputContentBlock::Thinking { .. } | InputContentBlock::ToolUse { .. } => None,
             })
             .collect(),
     }
