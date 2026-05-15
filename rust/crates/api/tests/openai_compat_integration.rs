@@ -26,7 +26,7 @@ async fn send_message_uses_openai_compatible_endpoint_and_auth() {
         "\"message\":{\"role\":\"assistant\",\"content\":\"Hello from Grok\",\"tool_calls\":[]},",
         "\"finish_reason\":\"stop\"",
         "}],",
-        "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5}",
+        "\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":5,\"prompt_tokens_details\":{\"cached_tokens\":3}}",
         "}"
     );
     let server = spawn_server(

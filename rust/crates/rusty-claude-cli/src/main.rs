@@ -3496,18 +3496,21 @@ fn format_permissions_switch_report(previous: &str, next: &str) -> String {
 }
 
 fn format_cost_report(usage: TokenUsage) -> String {
+    let estimated_cost = usage.estimate_cost_usd();
     format!(
         "Cost
   Input tokens     {}
   Output tokens    {}
   Cache create     {}
   Cache read       {}
-  Total tokens     {}",
+  Total tokens     {}
+  Estimated cost   {}",
         usage.input_tokens,
         usage.output_tokens,
         usage.cache_creation_input_tokens,
         usage.cache_read_input_tokens,
         usage.total_tokens(),
+        format_usd(estimated_cost.total_cost_usd()),
     )
 }
 
@@ -3911,6 +3914,8 @@ fn run_resume_command(
                     "cache_creation_input_tokens": usage.cache_creation_input_tokens,
                     "cache_read_input_tokens": usage.cache_read_input_tokens,
                     "total_tokens": usage.total_tokens(),
+                    "estimated_cost_usd": format_usd(usage.estimate_cost_usd().total_cost_usd()),
+                    "pricing": "estimated-default",
                 })),
             })
         }
@@ -6244,10 +6249,18 @@ fn status_json_value(
         "usage": {
             "messages": usage.message_count,
             "turns": usage.turns,
+            "latest_input": usage.latest.input_tokens,
+            "latest_output": usage.latest.output_tokens,
+            "latest_cache_creation_input": usage.latest.cache_creation_input_tokens,
+            "latest_cache_read_input": usage.latest.cache_read_input_tokens,
             "latest_total": usage.latest.total_tokens(),
             "cumulative_input": usage.cumulative.input_tokens,
             "cumulative_output": usage.cumulative.output_tokens,
+            "cumulative_cache_creation_input": usage.cumulative.cache_creation_input_tokens,
+            "cumulative_cache_read_input": usage.cumulative.cache_read_input_tokens,
             "cumulative_total": usage.cumulative.total_tokens(),
+            "estimated_cost_usd": format_usd(usage.cumulative.estimate_cost_usd().total_cost_usd()),
+            "pricing": "estimated-default",
             "estimated_tokens": usage.estimated_tokens,
         },
         "lane_board": {
@@ -6408,11 +6421,17 @@ fn format_status_report(
   Latest total     {}
   Cumulative input {}
   Cumulative output {}
-  Cumulative total {}",
+  Cache create     {}
+  Cache read       {}
+  Cumulative total {}
+  Estimated cost   {}",
             usage.latest.total_tokens(),
             usage.cumulative.input_tokens,
             usage.cumulative.output_tokens,
+            usage.cumulative.cache_creation_input_tokens,
+            usage.cumulative.cache_read_input_tokens,
             usage.cumulative.total_tokens(),
+            format_usd(usage.cumulative.estimate_cost_usd().total_cost_usd()),
         ),
         format!(
             "Workspace
@@ -12711,6 +12730,7 @@ mod tests {
         assert!(report.contains("Cache create     3"));
         assert!(report.contains("Cache read       1"));
         assert!(report.contains("Total tokens     32"));
+        assert!(report.contains("Estimated cost"));
     }
 
     #[test]
@@ -12858,7 +12878,10 @@ mod tests {
         assert!(status.contains("Permission mode  workspace-write"));
         assert!(status.contains("Messages         7"));
         assert!(status.contains("Latest total     10"));
+        assert!(status.contains("Cache create     2"));
+        assert!(status.contains("Cache read       1"));
         assert!(status.contains("Cumulative total 31"));
+        assert!(status.contains("Estimated cost"));
         assert!(status.contains("Cwd              /tmp/project"));
         assert!(status.contains("Project root     /tmp"));
         assert!(status.contains("Git branch       main"));
