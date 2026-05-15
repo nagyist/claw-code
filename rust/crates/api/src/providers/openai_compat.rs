@@ -933,7 +933,7 @@ fn wire_model_for_base_url<'a>(
     }
 
     if matches!(lowered_prefix.as_str(), "xai" | "grok" | "qwen" | "kimi") {
-        return Cow::Borrowed(strip_routing_prefix(model));
+        return Cow::Borrowed(&model[pos + 1..]);
     }
 
     Cow::Borrowed(model)
