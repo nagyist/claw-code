@@ -28,7 +28,8 @@ pub trait Provider {
     ) -> ProviderFuture<'a, Self::Stream>;
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderKind {
     Anthropic,
     Xai,
@@ -47,6 +48,55 @@ pub struct ProviderMetadata {
 pub struct ModelTokenLimit {
     pub max_output_tokens: u32,
     pub context_window_tokens: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderWireProtocol {
+    AnthropicMessages,
+    OpenAiChatCompletions,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderFeatureSupport {
+    Supported,
+    Unsupported,
+    PassthroughAsTool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderCapabilityReport {
+    pub provider: ProviderKind,
+    pub wire_protocol: ProviderWireProtocol,
+    pub auth_env: &'static str,
+    pub base_url_env: &'static str,
+    pub default_base_url: &'static str,
+    pub tool_calls: ProviderFeatureSupport,
+    pub streaming: ProviderFeatureSupport,
+    pub streaming_usage: ProviderFeatureSupport,
+    pub prompt_cache: ProviderFeatureSupport,
+    pub custom_parameters: ProviderFeatureSupport,
+    pub reasoning_effort: ProviderFeatureSupport,
+    pub reasoning_content_history: ProviderFeatureSupport,
+    pub fixed_sampling_reasoning_models: ProviderFeatureSupport,
+    pub web_search: ProviderFeatureSupport,
+    pub web_fetch: ProviderFeatureSupport,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderDiagnosticSeverity {
+    Info,
+    Warning,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderDiagnostic {
+    pub code: &'static str,
+    pub severity: ProviderDiagnosticSeverity,
+    pub message: String,
+    pub action: String,
 }
 
 const MODEL_REGISTRY: &[(&str, ProviderMetadata)] = &[
