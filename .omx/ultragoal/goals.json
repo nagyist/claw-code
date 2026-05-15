@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-14T07:53:46.061Z",
-  "updatedAt": "2026-05-15T01:59:22.219Z",
+  "updatedAt": "2026-05-15T02:20:46.558Z",
   "briefPath": ".omx/ultragoal/brief.md",
   "goalsPath": ".omx/ultragoal/goals.json",
   "ledgerPath": ".omx/ultragoal/ledger.jsonl",
@@ -118,11 +118,13 @@
       "id": "G010-session-hygiene",
       "title": "Stream 9: Session hygiene/local state/recovery UX",
       "objective": "Implement/verify session file hygiene, .gitignore state paths, per-worktree session isolation, list/delete/exists/compact/resume, compact/provider-context recovery, JSONL payload bloat safeguards, interrupt recovery, and clone disambiguation metadata.",
-      "status": "in_progress",
+      "status": "complete",
       "attempt": 1,
       "createdAt": "2026-05-14T07:54:21.409575Z",
-      "updatedAt": "2026-05-15T01:59:22.219Z",
-      "startedAt": "2026-05-15T01:59:22.219Z"
+      "updatedAt": "2026-05-15T02:20:46.558Z",
+      "startedAt": "2026-05-15T01:59:22.219Z",
+      "completedAt": "2026-05-15T02:20:46.558Z",
+      "evidence": "G010-session-hygiene complete: team g010-session-hygiene-e61d2271 phase complete with 7/7 tasks completed; final verification passed in .omx/ultragoal/g010-final-quality-gate-rerun.log; durable state recorded in .omx/ultragoal/goals.json and .omx/ultragoal/ledger.jsonl."
     },
     {
       "id": "G011-ecosystem-ops-ux",
@@ -143,6 +145,5 @@
       "updatedAt": "2026-05-14T07:54:21.409575Z"
     }
   ],
-  "codexObjective": "Complete the approved Claw Code 2.0 ultragoal delivery: implement all classified ROADMAP.md backlog work through execution-sized stream goals G001-G012, using .omx/ultragoal/ledger.jsonl as the durable audit trail and .omx/plans/claw-code-2-0-adaptive-plan.md as the source plan.",
-  "activeGoalId": "G010-session-hygiene"
+  "codexObjective": "Complete the approved Claw Code 2.0 ultragoal delivery: implement all classified ROADMAP.md backlog work through execution-sized stream goals G001-G012, using .omx/ultragoal/ledger.jsonl as the durable audit trail and .omx/plans/claw-code-2-0-adaptive-plan.md as the source plan."
 }
