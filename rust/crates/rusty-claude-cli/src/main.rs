@@ -6136,6 +6136,7 @@ fn session_exists_json(
     Ok(serde_json::json!({
         "kind": "session_exists",
         "session_id": resolved_id,
+        "session": target,
         "requested": target,
         "exists": exists,
         "active": resolved_id == active_session_id,
