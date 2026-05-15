@@ -9,8 +9,14 @@ on:
     paths:
       - .github/workflows/rust-ci.yml
       - .github/scripts/check_doc_source_of_truth.py
+      - .github/scripts/check_release_readiness.py
       - .github/FUNDING.yml
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - LICENSE
       - README.md
+      - SECURITY.md
+      - SUPPORT.md
       - USAGE.md
       - PARITY.md
       - PHILOSOPHY.md
@@ -23,8 +29,14 @@ on:
     paths:
       - .github/workflows/rust-ci.yml
       - .github/scripts/check_doc_source_of_truth.py
+      - .github/scripts/check_release_readiness.py
       - .github/FUNDING.yml
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - LICENSE
       - README.md
+      - SECURITY.md
+      - SUPPORT.md
       - USAGE.md
       - PARITY.md
       - PHILOSOPHY.md
@@ -58,6 +70,8 @@ jobs:
           python-version: "3.x"
       - name: Check docs and metadata for stale branding
         run: python .github/scripts/check_doc_source_of_truth.py
+      - name: Check release policy docs and local links
+        run: python .github/scripts/check_release_readiness.py
 
   fmt:
     name: cargo fmt

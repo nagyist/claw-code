@@ -11,6 +11,10 @@
   ·
   <a href="./ROADMAP.md">Roadmap</a>
   ·
+  <a href="./CONTRIBUTING.md">Contributing</a>
+  ·
+  <a href="./SECURITY.md">Security</a>
+  ·
   <a href="https://discord.gg/5TUQKqFWd">UltraWorkers Discord</a>
 </p>
 
@@ -209,6 +213,8 @@ cargo test --workspace
 - [`ROADMAP.md`](./ROADMAP.md) — active roadmap and open cleanup work
 - [`docs/g004-events-reports-contract.md`](./docs/g004-events-reports-contract.md) — Stream 2 lane event/report contract guidance for consumers
 - [`PHILOSOPHY.md`](./PHILOSOPHY.md) — why the project exists and how it is operated
+- [`CONTRIBUTING.md`](./CONTRIBUTING.md), [`SECURITY.md`](./SECURITY.md), [`SUPPORT.md`](./SUPPORT.md), and [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md) — contribution, vulnerability-reporting, support, and community policies
+- [`LICENSE`](./LICENSE) — MIT license for this repository
 
 ## Ecosystem
 

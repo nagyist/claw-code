@@ -9,7 +9,7 @@ This document describes model-specific handling in the OpenAI-compatible provide
   - [Kimi Models (is_error Exclusion)](#kimi-models-is_error-exclusion)
   - [Reasoning Models (Tuning Parameter Stripping)](#reasoning-models-tuning-parameter-stripping)
   - [GPT-5 (max_completion_tokens)](#gpt-5-max_completion_tokens)
-  - [Qwen Models (DashScope Routing)](#qwen-models-dashscope-routing)
+  - [Qwen and Kimi Models (DashScope Routing)](#qwen-and-kimi-models-dashscope-routing)
   - [Custom Gateway Slugs and Extra Body Parameters](#custom-gateway-slugs-and-extra-body-parameters)
 - [Implementation Details](#implementation-details)
 - [Adding New Models](#adding-new-models)
