@@ -275,10 +275,12 @@ mod tests {
             oauth: None,
         });
         let user = ScopedMcpServerConfig {
+            required: false,
             scope: ConfigSource::User,
             config: base_config.clone(),
         };
         let local = ScopedMcpServerConfig {
+            required: false,
             scope: ConfigSource::Local,
             config: base_config,
         };
@@ -288,6 +290,7 @@ mod tests {
         );
 
         let changed = ScopedMcpServerConfig {
+            required: false,
             scope: ConfigSource::Local,
             config: McpServerConfig::Http(McpRemoteServerConfig {
                 url: "https://vendor.example/v2/mcp".to_string(),

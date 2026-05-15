@@ -101,6 +101,7 @@ pub struct McpConfigCollection {
 /// MCP server config paired with the scope that defined it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScopedMcpServerConfig {
+    pub required: bool,
     pub scope: ConfigSource,
     pub config: McpServerConfig,
 }
@@ -752,6 +753,12 @@ fn merge_mcp_servers(
         target.insert(
             name.clone(),
             ScopedMcpServerConfig {
+                required: optional_bool(
+                    expect_object(value, &format!("{}: mcpServers.{name}", path.display()))?,
+                    "required",
+                    &format!("{}: mcpServers.{name}", path.display()),
+                )?
+                .unwrap_or(false),
                 scope: source,
                 config: parsed,
             },

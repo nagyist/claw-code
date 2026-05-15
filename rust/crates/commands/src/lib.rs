@@ -4188,6 +4188,7 @@ fn mcp_server_details_json(config: &McpServerConfig) -> Value {
 fn mcp_server_json(name: &str, server: &ScopedMcpServerConfig) -> Value {
     json!({
         "name": name,
+        "required": server.required,
         "scope": config_source_json(server.scope),
         "transport": mcp_transport_json(&server.config),
         "summary": mcp_server_summary(&server.config),

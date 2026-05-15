@@ -4542,7 +4542,10 @@ impl RuntimeMcpState {
                         runtime::McpLifecyclePhase::ToolDiscovery,
                         Some(failure.server_name.clone()),
                         failure.error.clone(),
-                        std::collections::BTreeMap::new(),
+                        std::collections::BTreeMap::from([(
+                            "required".to_string(),
+                            failure.required.to_string(),
+                        )]),
                         true,
                     ),
                 })
@@ -4557,6 +4560,9 @@ impl RuntimeMcpState {
                             std::collections::BTreeMap::from([(
                                 "transport".to_string(),
                                 format!("{:?}", server.transport).to_ascii_lowercase(),
+                            ), (
+                                "required".to_string(),
+                                server.required.to_string(),
                             )]),
                             false,
                         ),
